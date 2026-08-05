@@ -82,6 +82,7 @@ pub(crate) struct SearchState {
     // list renders "searching…" instead of "(empty)" while it's set.
     pub(crate) in_flight: bool,
     pub(crate) search_results: Vec<LibItem>,
+    pub(crate) playlist_results: Option<Vec<LibItem>>,
 }
 
 impl SearchState {
@@ -117,6 +118,7 @@ pub(crate) struct ViewState {
 /// double-click work.
 pub(crate) struct SessionState {
     pub(crate) restore_uri: Option<String>,
+    pub(crate) restore_on_startup: bool,
     // Track URI whose metadata was last requested. Fetches run on separate
     // blocking tasks and can land out of order when skipping quickly, so a
     // reply for any other track is stale and must be dropped.
