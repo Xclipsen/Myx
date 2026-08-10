@@ -100,7 +100,7 @@ fn main() -> Result<()> {
     if engine::needs_authorization() || !WebApi::is_cached() {
         println!("myx: first run — authorizing with Spotify…");
     }
-    let ((creds, webapi), mut terminal) = auth_then_terminal(
+    let ((creds, webapi), terminal) = auth_then_terminal(
         || {
             let creds = engine::credentials()?;
             let webapi = WebApi::init().context("authorize web api")?;
@@ -123,12 +123,36 @@ fn main() -> Result<()> {
         picker.font_size()
     ));
 
+    #[cfg(target_os = "macos")]
+    let res = run_player_macos(terminal, saved, init_vol, creds, webapi, picker);
+    #[cfg(not(target_os = "macos"))]
+    let res = run_player(terminal, saved, init_vol, creds, webapi, picker, true);
+    res
+}
+
+fn run_player(
+    mut terminal: Term,
+    saved: SavedState,
+    init_vol: u8,
+    creds: librespot_core::authentication::Credentials,
+    webapi: WebApi,
+    picker: Picker,
+    media_platform_ready: bool,
+) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
         .build()
         .context("start tokio runtime")?;
-    let outcome = runtime.block_on(boot(&mut terminal, saved, init_vol, creds, webapi, picker));
+    let outcome = runtime.block_on(boot(
+        &mut terminal,
+        saved,
+        init_vol,
+        creds,
+        webapi,
+        picker,
+        media_platform_ready,
+    ));
     let restored = restore_terminal(&mut terminal);
     // Say goodbye *after* the screen is back, so a subscriber that has stopped
     // reading can never hold the alternate screen open while `shutdown` waits
@@ -144,6 +168,69 @@ fn main() -> Result<()> {
     };
     restored?;
     res
+}
+
+/// macOS delivers Now Playing commands (AirPods, Control Center) through the
+/// main thread's run loop, so the winit loop takes the main thread and the
+/// player runs beside it. No loop only costs the native integration.
+#[cfg(target_os = "macos")]
+fn run_player_macos(
+    terminal: Term,
+    saved: SavedState,
+    init_vol: u8,
+    creds: librespot_core::authentication::Credentials,
+    webapi: WebApi,
+    picker: Picker,
+) -> Result<()> {
+    use winit::application::ApplicationHandler;
+    use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+
+    struct PlayerDone;
+
+    struct MediaPump;
+    impl ApplicationHandler<PlayerDone> for MediaPump {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+        fn window_event(
+            &mut self,
+            _: &ActiveEventLoop,
+            _: winit::window::WindowId,
+            _: winit::event::WindowEvent,
+        ) {
+        }
+        fn user_event(&mut self, event_loop: &ActiveEventLoop, _: PlayerDone) {
+            event_loop.exit();
+        }
+    }
+
+    // Accessory keeps myx out of the Dock and the app switcher.
+    let event_loop = match EventLoop::<PlayerDone>::with_user_event()
+        .with_activation_policy(ActivationPolicy::Accessory)
+        .build()
+    {
+        Ok(event_loop) => event_loop,
+        Err(e) => {
+            liblog(format!("media event loop unavailable: {e}"));
+            return run_player(terminal, saved, init_vol, creds, webapi, picker, false);
+        }
+    };
+
+    let proxy = event_loop.create_proxy();
+    let player = std::thread::spawn(move || {
+        let res = run_player(terminal, saved, init_vol, creds, webapi, picker, true);
+        let _ = proxy.send_event(PlayerDone);
+        res
+    });
+
+    if let Err(e) = event_loop.run_app(&mut MediaPump) {
+        liblog(format!("media event loop stopped: {e}"));
+    }
+    match player.join() {
+        Ok(res) => res,
+        Err(_) => Err(anyhow::anyhow!("player thread panicked")),
+    }
 }
 
 /// What `boot` hands back so `main` can say goodbye on the exit path.
@@ -226,6 +313,7 @@ async fn boot(
     creds: librespot_core::authentication::Credentials,
     webapi: WebApi,
     picker: Picker,
+    media_platform_ready: bool,
 ) -> Result<MxcHandle> {
     let (ev_tx, ev_rx) = flume::unbounded::<EngineEvent>();
     let engine = with_loader(
@@ -267,15 +355,6 @@ async fn boot(
     // Myx is a TUI with no window of its own, get the console's window instead.
     #[cfg(windows)]
     let hwnd = Some(unsafe { windows_win::sys::GetConsoleWindow() });
-
-    // macOS media controls require an event loop. Failure only disables native
-    // integration; the terminal player remains fully usable.
-    #[cfg(target_os = "macos")]
-    let media_event_loop = winit::event_loop::EventLoop::new().ok();
-    #[cfg(not(target_os = "macos"))]
-    let media_platform_ready = true;
-    #[cfg(target_os = "macos")]
-    let media_platform_ready = media_event_loop.is_some();
 
     let media_controls = optional_integration(media_platform_ready, || {
         MediaControls::new(PlatformConfig {

@@ -75,7 +75,9 @@ z          hide sidebar          q        quit
 ```
 
 Media keys (Play/Pause, Stop, Next, Prev, Volume) work when the terminal is
-focused. Mouse works too: click tabs, click a track, double-click to play.
+focused. On macOS and Linux, AirPods and headphone controls work from anywhere
+via the system's Now Playing integration. Mouse works too: click tabs, click a
+track, double-click to play.
 
 Holding `⇧ ←` / `⇧ →` scrubs continuously and commits one seek when you let go.
 `⇧ ⏎` needs a terminal that reports modified Enter (kitty, WezTerm, foot); `P`
