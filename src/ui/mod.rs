@@ -137,9 +137,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
             .split(body_area);
         render_library(f, app, out, theme, body[0]);
         match app.view.mode {
-            RightView::NowPlaying => {
-                render_nowplaying_view(f, app, out, theme, body[1], repaint)
-            }
+            RightView::NowPlaying => render_nowplaying_view(f, app, out, theme, body[1], repaint),
             RightView::Lyrics => render_lyrics(f, app, theme, body[1]),
             RightView::Queue => render_queue_view(f, app, theme, body[1]),
         }

@@ -103,6 +103,16 @@ name = "probe"
 path = "examples/probe.rs"
 required-features = ["streaming"]
 
+[[example]]
+name = "libcheck"
+path = "examples/libcheck.rs"
+required-features = ["streaming"]
+
+[[example]]
+name = "radiocheck"
+path = "examples/radiocheck.rs"
+required-features = ["streaming"]
+
 [profile.release]
 lto = true
 codegen-units = 1
