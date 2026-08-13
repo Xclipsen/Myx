@@ -26,6 +26,7 @@ const NOW_PLAYING_SPLIT_MIN_WIDTH: u16 = 72;
 const ZEN_QUEUE_SPLIT_MIN_WIDTH: u16 = 52;
 
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
+    out.art = None;
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
@@ -101,11 +102,13 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
                 Layout::horizontal([Constraint::Percentage(68), Constraint::Percentage(32)])
                     .spacing(2)
                     .split(body_area);
-            render_nowplaying_view(f, app, theme, panes[0], repaint);
+            render_nowplaying_view(f, app, out, theme, panes[0], repaint);
             render_queue_view(f, app, theme, panes[1]);
         } else {
             match app.view.mode {
-                RightView::NowPlaying => render_nowplaying_view(f, app, theme, body_area, repaint),
+                RightView::NowPlaying => {
+                    render_nowplaying_view(f, app, out, theme, body_area, repaint)
+                }
                 RightView::Lyrics => render_lyrics(f, app, theme, body_area),
                 RightView::Queue => render_queue_view(f, app, theme, body_area),
             }
@@ -121,7 +124,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         .spacing(2)
         .split(body_area);
         render_library(f, app, out, theme, panes[0]);
-        render_nowplaying_view(f, app, theme, panes[1], repaint);
+        render_nowplaying_view(f, app, out, theme, panes[1], repaint);
         render_queue_view(f, app, theme, panes[2]);
     } else {
         let body = Layout::horizontal([Constraint::Percentage(30), Constraint::Min(24)])
@@ -129,7 +132,9 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
             .split(body_area);
         render_library(f, app, out, theme, body[0]);
         match app.view.mode {
-            RightView::NowPlaying => render_nowplaying_view(f, app, theme, body[1], repaint),
+            RightView::NowPlaying => {
+                render_nowplaying_view(f, app, out, theme, body[1], repaint)
+            }
             RightView::Lyrics => render_lyrics(f, app, theme, body[1]),
             RightView::Queue => render_queue_view(f, app, theme, body[1]),
         }
