@@ -4,6 +4,15 @@ Newest first. Format follows [Keep a Changelog](https://keepachangelog.com);
 versions follow [semver](https://semver.org). Released sections are a record —
 they are added to, never rewritten.
 
+## [Unreleased]
+
+### Fixed
+
+- macOS: AirPods, headphone and Control Center controls now work without the
+  terminal focused. The handlers were registered but nothing ran the
+  main-thread event loop that delivers them.
+
+
 ## [0.4.0] — 2026-08-04
 
 ### Added
