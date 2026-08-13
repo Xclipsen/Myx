@@ -56,6 +56,9 @@ pub(crate) struct Transport {
     // What's playing (context/radio/liked), for faithful resume on reboot.
     pub(crate) source: PlaySource,
     pub(crate) source_name: String,
+    /// Local DSP state. Kept with the transport controls because it affects the
+    /// audio path and is persisted alongside volume/shuffle/repeat.
+    pub(crate) equalizer: EqualizerSettings,
 }
 
 /// The library browser: what's loaded, where the cursor is, and the drill-in
@@ -110,6 +113,13 @@ pub(crate) struct ViewState {
     pub(crate) lyrics_synced: bool,
     // Context actions menu overlay (opened with `a`).
     pub(crate) actions: Option<ActionMenu>,
+    // Ten-band equalizer overlay (opened with `e`).
+    pub(crate) equalizer: Option<EqualizerOverlay>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EqualizerOverlay {
+    pub(crate) selected_band: usize,
 }
 
 /// Cross-cutting session bookkeeping: which metadata fetch is still in flight

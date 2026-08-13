@@ -3,6 +3,48 @@
 use super::*;
 use crate::*;
 
+fn nowplaying_regions(area: Rect) -> (Rect, Rect) {
+    let chunks = Layout::vertical([
+        Constraint::Min(6),    // art + text
+        Constraint::Length(7), // spectrum
+        Constraint::Length(2), // breathing room (lifts the spectrum up)
+    ])
+    .split(area);
+    let top = Rect {
+        x: chunks[0].x,
+        y: chunks[0].y + 3,
+        width: chunks[0].width,
+        height: chunks[0].height.saturating_sub(3),
+    };
+    (top, chunks[1])
+}
+
+/// Album-art footprint for the current Now Playing layout. The equalizer uses
+/// the same calculation so its text-cell popup never clips the inline image.
+pub(crate) fn nowplaying_art_rect(app: &App, area: Rect) -> Option<Rect> {
+    app.playback.now.as_ref()?;
+    let (top, _) = nowplaying_regions(area);
+
+    let font = app.svc.picker.font_size();
+    let fw = font.width.max(1) as u32;
+    let fh = font.height.max(1) as u32;
+    let avail_h = top.height.saturating_sub(4);
+    let mut art_h = avail_h.clamp(3, 14);
+    let mut art_w = (art_h as u32 * fh / fw) as u16;
+    if art_w > top.width {
+        art_w = top.width;
+        art_h = (art_w as u32 * fw / fh) as u16;
+    }
+
+    let group_h = art_h + 4;
+    Some(Rect {
+        x: top.x + top.width.saturating_sub(art_w) / 2,
+        y: top.y + top.height.saturating_sub(group_h) / 2,
+        width: art_w,
+        height: art_h,
+    })
+}
+
 /// View ①: album art with track details directly beneath — centered as a group.
 pub(crate) fn render_nowplaying_view(
     f: &mut Frame,
@@ -23,47 +65,9 @@ pub(crate) fn render_nowplaying_view(
 
     // Split: album art + track info on top, a compact spectrum below, lifted a
     // little off the bottom.
-    let chunks = Layout::vertical([
-        Constraint::Min(6),    // art + text
-        Constraint::Length(7), // spectrum
-        Constraint::Length(2), // breathing room (lifts the spectrum up)
-    ])
-    .split(area);
-    let top = chunks[0];
-    // Push the art + info group down a little from the top.
-    let top = Rect {
-        x: top.x,
-        y: top.y + 3,
-        width: top.width,
-        height: top.height.saturating_sub(3),
-    };
-    let viz_area = chunks[1];
-
-    // Derive the cover's cell footprint from the terminal's font aspect so a
-    // square image renders square (and our centering math is exact).
-    let font = app.svc.picker.font_size();
-    let fw = font.width.max(1) as u32;
-    let fh = font.height.max(1) as u32;
-
-    // Reserve 3 rows for text (+1 gap). Cap the art so the group stays compact.
-    let avail_h = top.height.saturating_sub(4);
-    let mut art_h = avail_h.clamp(3, 14);
-    // Square image width in cells for this height: w = h * fh / fw.
-    let mut art_w = (art_h as u32 * fh / fw) as u16;
-    if art_w > top.width {
-        art_w = top.width;
-        art_h = (art_w as u32 * fw / fh) as u16;
-    }
-
-    let group_h = art_h + 4; // art + gap + title + artist + album
-    let art_y = top.y + top.height.saturating_sub(group_h) / 2;
-    let art_x = top.x + top.width.saturating_sub(art_w) / 2;
-    let art_rect = Rect {
-        x: art_x,
-        y: art_y,
-        width: art_w,
-        height: art_h,
-    };
+    let (top, viz_area) = nowplaying_regions(area);
+    let art_rect = nowplaying_art_rect(app, area).expect("current track checked above");
+    let art_h = art_rect.height;
 
     match app.playback.now.as_ref().and_then(|n| n.cover.as_ref()) {
         _ if repaint == ArtRepaint::Wipe => wipe_area(f, art_rect),

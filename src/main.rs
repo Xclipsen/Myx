@@ -1,7 +1,7 @@
 //! myx — the fully-wired terminal Spotify player.
 //!
 //! librespot streaming engine + Web API (your own client id) + album-art-reactive
-//! theming with cross-fades + live FFT visualizer, in noodle's visual language.
+//! theming with cross-fades + live equalizer/FFT visualizer, in noodle's visual language.
 //! Multi-section library (playlists / liked / albums / artists), shuffle, repeat,
 //! and a live queue view.
 
@@ -44,7 +44,10 @@ use api::*;
 use app::*;
 use input::*;
 use myx::anim::ThemeFade;
-use myx::audio::NUM_BANDS;
+use myx::audio::{
+    EqualizerPreset, EqualizerSettings, EQ_FREQUENCIES_HZ, MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB,
+    NUM_BANDS, NUM_EQ_BANDS,
+};
 use myx::components::{gradient_line, gradient_progress, left_bar_block};
 use myx::cover::Cover;
 use myx::engine::{self, Engine, EngineEvent};
@@ -331,6 +334,8 @@ async fn boot(
     )
     .await?
     .context("start engine")?;
+    let equalizer = saved.equalizer.normalized();
+    engine.set_equalizer(equalizer);
 
     let webapi = Arc::new(Mutex::new(webapi));
 
@@ -432,6 +437,7 @@ async fn boot(
             playback_started: startup_uri.is_some(),
             source,
             source_name,
+            equalizer,
         },
         search: SearchState {
             input_mode: false,
@@ -446,6 +452,7 @@ async fn boot(
             lyrics: Vec::new(),
             lyrics_synced: false,
             actions: None,
+            equalizer: None,
         },
         session: SessionState {
             restore_uri,
@@ -566,7 +573,7 @@ async fn run_ui(
     // Nothing is on screen yet, so the first tick must draw.
     let mut dirty = true;
     let mut last_layout = (app.view.mode, app.view.zen);
-    let mut overlay_open = app.view.actions.is_some();
+    let mut action_overlay_open = app.view.actions.is_some();
     // What the renderer writes. Lives across frames: the hit rects are what the
     // mouse handler reads between draws, and `lib_offset` is fed back into the
     // next frame's sticky-viewport calculation.
@@ -658,10 +665,10 @@ async fn run_ui(
                 // pixels, so the cover has to be sent again once it closes.
                 // Opening one must not wipe: the image would be redrawn a frame
                 // later, back on top of the popup.
-                let overlay = app.view.actions.is_some();
-                if overlay != overlay_open {
-                    overlay_open = overlay;
-                    if !overlay {
+                let action_overlay = app.view.actions.is_some();
+                if action_overlay != action_overlay_open {
+                    action_overlay_open = action_overlay;
+                    if !action_overlay {
                         app.art_repaint = ArtRepaint::Wipe;
                     }
                     dirty = true;

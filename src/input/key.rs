@@ -31,6 +31,11 @@ pub(crate) fn handle_key(
         return false;
     }
 
+    if app.view.equalizer.is_some() {
+        handle_equalizer_key(app, code);
+        return false;
+    }
+
     // --- Search input mode captures everything ---
     if app.search.input_mode {
         match code {
@@ -70,6 +75,9 @@ pub(crate) fn handle_key(
     }
 
     match code {
+        KeyCode::Char('e') => {
+            app.view.equalizer = Some(EqualizerOverlay::default());
+        }
         KeyCode::Char('/') => {
             app.search.input_mode = true;
             app.search.clear();
