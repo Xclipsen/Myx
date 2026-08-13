@@ -29,9 +29,6 @@ const ZEN_QUEUE_SPLIT_MIN_WIDTH: u16 = 52;
 
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
     out.art = None;
-    out.hits.eq_toggle = None;
-    out.hits.eq_presets.clear();
-    out.hits.eq_bands.clear();
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
