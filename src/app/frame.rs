@@ -24,6 +24,19 @@ pub(crate) struct HitRects {
     pub(crate) lib: Option<Rect>,
     /// Rows in the currently visible actions menu.
     pub(crate) actions: Vec<Rect>,
+    /// Equalizer overlay controls. Empty whenever that modal is closed.
+    pub(crate) eq_toggle: Option<Rect>,
+    pub(crate) eq_presets: Vec<(EqualizerPreset, Rect)>,
+    pub(crate) eq_bands: Vec<EqualizerBandHit>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EqualizerBandHit {
+    pub(crate) band: usize,
+    pub(crate) rect: Rect,
+    /// Normal layout uses vertical sliders; the narrow fallback uses one
+    /// horizontal slider for the selected band.
+    pub(crate) vertical: bool,
 }
 
 /// Everything the renderer writes, kept out of `App` so every render function

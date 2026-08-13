@@ -4,6 +4,7 @@
 //! nothing here mutates application state. One module per screen, so the file
 //! to open is the one named after the thing on screen.
 
+mod equalizer;
 mod footer;
 mod library;
 mod lyrics;
@@ -12,6 +13,7 @@ mod overlay;
 mod queue;
 mod visualizer;
 
+pub(crate) use equalizer::*;
 pub(crate) use footer::*;
 pub(crate) use library::*;
 pub(crate) use lyrics::*;
@@ -27,6 +29,9 @@ const ZEN_QUEUE_SPLIT_MIN_WIDTH: u16 = 52;
 
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
     out.art = None;
+    out.hits.eq_toggle = None;
+    out.hits.eq_presets.clear();
+    out.hits.eq_bands.clear();
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
@@ -93,7 +98,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
     out.hits.tabs = tabs;
 
     let body_area = rows[2];
-    if app.view.zen {
+    let active_area = if app.view.zen {
         // Hidden, not zero-width: a rendered sidebar still claims mouse rects.
         out.hits.lib = None;
         out.hits.scroll = None;
@@ -104,6 +109,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
                     .split(body_area);
             render_nowplaying_view(f, app, out, theme, panes[0], repaint);
             render_queue_view(f, app, theme, panes[1]);
+            panes[0]
         } else {
             match app.view.mode {
                 RightView::NowPlaying => {
@@ -112,6 +118,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
                 RightView::Lyrics => render_lyrics(f, app, theme, body_area),
                 RightView::Queue => render_queue_view(f, app, theme, body_area),
             }
+            body_area
         }
     } else if app.view.mode == RightView::NowPlaying
         && body_area.width >= NOW_PLAYING_SPLIT_MIN_WIDTH
@@ -126,6 +133,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         render_library(f, app, out, theme, panes[0]);
         render_nowplaying_view(f, app, out, theme, panes[1], repaint);
         render_queue_view(f, app, theme, panes[2]);
+        panes[1]
     } else {
         let body = Layout::horizontal([Constraint::Percentage(30), Constraint::Min(24)])
             .spacing(3)
@@ -138,7 +146,8 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
             RightView::Lyrics => render_lyrics(f, app, theme, body[1]),
             RightView::Queue => render_queue_view(f, app, theme, body[1]),
         }
-    }
+        body[1]
+    };
 
     render_now_strip(f, app, out, theme, rows[4]);
     render_footer(f, app, theme, rows[5]);
@@ -147,6 +156,11 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         render_actions_overlay(f, app, out, theme, area);
     } else {
         out.hits.actions.clear();
+        if app.view.equalizer.is_some() {
+            // Keep album art visible: the editor lives in the active pane and
+            // positions itself in free space around the cover.
+            render_equalizer_overlay(f, app, out, theme, active_area);
+        }
     }
 }
 

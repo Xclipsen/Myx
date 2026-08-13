@@ -1,8 +1,8 @@
 # myx
 
 A lean, beautiful terminal Spotify player in Rust. Streams natively as a Spotify
-Connect device, with album-art-reactive theming, a live audio visualizer, and
-synced lyrics.
+Connect device, with album-art-reactive theming, a live audio visualizer, a
+ten-band equalizer, and synced lyrics.
 
 <p align="center"><video src="https://github.com/user-attachments/assets/90706ba9-4c48-43d0-ad16-17b95c95dc94" alt="myx recolors the whole interface to the album art" width="100%"></p>
 
@@ -71,13 +71,23 @@ space      play · pause          n / b    next · prev
 ⇧ ← →      seek                  s        shuffle
 + / -      volume                R        repeat
 o          sort                  r        reload
-z          hide sidebar          q        quit
+z          hide sidebar          e        equalizer
+q          quit
 ```
 
 Media keys (Play/Pause, Stop, Next, Prev, Volume) work when the terminal is
 focused. On macOS and Linux, AirPods and headphone controls work from anywhere
 via the system's Now Playing integration. Mouse works too: click tabs, click a
 track, double-click to play.
+
+## Equalizer
+
+Press `e` for the live ten-band equalizer. Choose Flat, Bass Boost, Rock, Jazz,
+Vocal, Electronic or Treble Boost with `Tab` / `Shift+Tab`; changing a band
+creates a Custom curve. Use `←`/`→` to choose a band, `↑`/`↓` to adjust it,
+`Space` to compare against bypass, and `Esc` to close. Presets and sliders are
+also clickable and draggable. Automatic headroom keeps boosted curves from
+digitally clipping, and the complete curve is restored on the next launch.
 
 Holding `⇧ ←` / `⇧ →` scrubs continuously and commits one seek when you let go.
 `⇧ ⏎` needs a terminal that reports modified Enter (kitty, WezTerm, foot); `P`

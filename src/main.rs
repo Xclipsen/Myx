@@ -1,7 +1,7 @@
 //! myx — the fully-wired terminal Spotify player.
 //!
 //! librespot streaming engine + Web API (your own client id) + album-art-reactive
-//! theming with cross-fades + live FFT visualizer, in noodle's visual language.
+//! theming with cross-fades + live equalizer/FFT visualizer, in noodle's visual language.
 //! Multi-section library (playlists / liked / albums / artists), shuffle, repeat,
 //! and a live queue view.
 
@@ -44,7 +44,10 @@ use api::*;
 use app::*;
 use input::*;
 use myx::anim::ThemeFade;
-use myx::audio::NUM_BANDS;
+use myx::audio::{
+    EqualizerPreset, EqualizerSettings, EQ_FREQUENCIES_HZ, MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB,
+    NUM_BANDS, NUM_EQ_BANDS,
+};
 use myx::components::{gradient_line, gradient_progress, left_bar_block};
 use myx::cover::Cover;
 use myx::engine::{self, Engine, EngineEvent};
@@ -331,6 +334,8 @@ async fn boot(
     )
     .await?
     .context("start engine")?;
+    let equalizer = saved.equalizer.normalized();
+    engine.set_equalizer(equalizer);
 
     let webapi = Arc::new(Mutex::new(webapi));
 
@@ -433,6 +438,7 @@ async fn boot(
             playback_started: startup_uri.is_some(),
             source,
             source_name,
+            equalizer,
         },
         search: SearchState {
             input_mode: false,
@@ -449,6 +455,7 @@ async fn boot(
             lyrics_synced: false,
             actions: None,
             action_anchor: None,
+            equalizer: None,
         },
         session: SessionState {
             restore_uri,
