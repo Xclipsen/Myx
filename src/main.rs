@@ -567,6 +567,9 @@ async fn run_ui(
     let mut dirty = true;
     let mut last_layout = (app.view.mode, app.view.zen);
     let mut overlay_open = app.view.actions.is_some();
+    // A popup overwrites inline-image pixels. Replay the cached cover after the
+    // popup-free frame instead of blanking it for one visible frame first.
+    let mut restore_art = false;
     // What the renderer writes. Lives across frames: the hit rects are what the
     // mouse handler reads between draws, and `lib_offset` is fed back into the
     // next frame's sticky-viewport calculation.
@@ -662,7 +665,7 @@ async fn run_ui(
                 if overlay != overlay_open {
                     overlay_open = overlay;
                     if !overlay {
-                        app.art_repaint = ArtRepaint::Wipe;
+                        restore_art = true;
                     }
                     dirty = true;
                 }
@@ -674,10 +677,35 @@ async fn run_ui(
                     // Terminals that don't know the mode ignore it.
                     let _ = execute!(io::stdout(), BeginSynchronizedUpdate);
                     let repaint = app.art_repaint;
-                    let drawn = terminal.draw(|f| render(f, &app, &mut out, repaint));
+                    let drawn = terminal
+                        .draw(|f| render(f, &app, &mut out, repaint))
+                        .map(|_| ());
+                    let restore_result = if drawn.is_ok()
+                        && restore_art
+                        && !overlay_open
+                        && app.view.mode == RightView::NowPlaying
+                    {
+                        out.art
+                            .zip(
+                                app.playback
+                                    .now
+                                    .as_ref()
+                                    .and_then(|now| now.cover.as_ref()),
+                            )
+                            .map(|(area, cover)| cover.render_direct(terminal.backend_mut(), area))
+                    } else {
+                        None
+                    };
                     let _ = execute!(io::stdout(), EndSynchronizedUpdate);
                     drawn?;
                     app.art_repaint = app.art_repaint.advance();
+                    if restore_art && !overlay_open {
+                        restore_art = false;
+                        if let Some(Err(err)) = restore_result {
+                            liblog(format!("cover restore failed: {err}"));
+                            app.art_repaint = ArtRepaint::Wipe;
+                        }
+                    }
                     last_draw = Instant::now();
                     dirty = false;
                 }
@@ -720,7 +748,7 @@ async fn run_ui(
                         app.art_repaint = ArtRepaint::Wipe;
                     }
                     Ok(Event::FocusGained) if std::env::var_os("TMUX").is_some() => {
-                        app.art_repaint = ArtRepaint::Wipe;
+                        restore_art = true;
                     }
                     _ => {}
                 }

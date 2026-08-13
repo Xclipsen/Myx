@@ -23,6 +23,7 @@ pub(crate) use visualizer::*;
 use crate::*;
 
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
+    out.art = None;
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
@@ -101,7 +102,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         body[1]
     };
     match app.view.mode {
-        RightView::NowPlaying => render_nowplaying_view(f, app, theme, right, repaint),
+        RightView::NowPlaying => render_nowplaying_view(f, app, out, theme, right, repaint),
         RightView::Lyrics => render_lyrics(f, app, theme, right),
         RightView::Queue => render_queue_view(f, app, theme, right),
     }
