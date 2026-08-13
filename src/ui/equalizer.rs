@@ -5,9 +5,10 @@ use crate::*;
 
 const NORMAL_MIN_WIDTH: u16 = 62;
 const NORMAL_MIN_HEIGHT: u16 = 16;
-const ART_GAP_X: u16 = 2;
-/// Cover metadata occupies the three rows below the art plus one gap row.
-const ART_GAP_BELOW: u16 = 4;
+const NOW_PLAYING_BOTTOM_ROWS: u16 = 9;
+const NOW_PLAYING_TOP_INSET: u16 = 3;
+const MAX_ART_HEIGHT: u16 = 14;
+const ART_METADATA_ROWS: u16 = 4;
 
 pub(crate) fn render_equalizer_overlay(
     f: &mut Frame,
@@ -19,10 +20,10 @@ pub(crate) fn render_equalizer_overlay(
     let Some(overlay) = app.view.equalizer.as_ref() else {
         return;
     };
-    let art = (app.view.mode == RightView::NowPlaying)
-        .then(|| nowplaying_art_rect(app, area))
-        .flatten();
-    let rect = equalizer_rect(area, art);
+    out.hits.eq_toggle = None;
+    out.hits.eq_presets.clear();
+    out.hits.eq_bands.clear();
+    let rect = equalizer_rect(area, app.view.mode == RightView::NowPlaying);
 
     f.render_widget(Clear, rect);
     f.render_widget(Block::default().style(theme.element()), rect);
@@ -42,60 +43,42 @@ pub(crate) fn render_equalizer_overlay(
     force_area(f, rect);
 }
 
-/// Prefer the free area below the cover (replacing the visualizer while the
-/// editor is open). Small terminals fall back to the largest non-overlapping
-/// side and automatically use the compact controls.
-fn equalizer_rect(area: Rect, art: Option<Rect>) -> Rect {
-    let desired_width = (area.width.saturating_mul(9) / 10)
+/// Prefer the free area below the complete cover/metadata group, replacing the
+/// visualizer while the editor is open. The constants mirror the Now Playing
+/// layout without coupling this feature to its renderer; that keeps the two
+/// independently mergeable. Short panes naturally select the compact controls.
+fn equalizer_rect(area: Rect, reserve_now_playing: bool) -> Rect {
+    let region = if reserve_now_playing {
+        let top_height = area
+            .height
+            .saturating_sub(NOW_PLAYING_BOTTOM_ROWS)
+            .saturating_sub(NOW_PLAYING_TOP_INSET);
+        let art_height = top_height
+            .saturating_sub(ART_METADATA_ROWS)
+            .clamp(3, MAX_ART_HEIGHT);
+        let group_height = art_height.saturating_add(ART_METADATA_ROWS);
+        let group_y = area
+            .y
+            .saturating_add(NOW_PLAYING_TOP_INSET)
+            .saturating_add(top_height.saturating_sub(group_height) / 2);
+        let below_y = group_y.saturating_add(group_height).min(area.bottom());
+        Rect::new(area.x, below_y, area.width, area.bottom() - below_y)
+    } else {
+        area
+    };
+
+    let width = (region.width.saturating_mul(9) / 10)
         .clamp(1, 100)
-        .min(area.width);
-    let desired_height = (area.height.saturating_mul(9) / 10)
+        .min(region.width);
+    let height = (region.height.saturating_mul(9) / 10)
         .clamp(1, 24)
-        .min(area.height);
-    let fit = |region: Rect| {
-        let width = desired_width.min(region.width);
-        let height = desired_height.min(region.height);
-        Rect::new(
-            region.x + region.width.saturating_sub(width) / 2,
-            region.y + region.height.saturating_sub(height) / 2,
-            width,
-            height,
-        )
-    };
-
-    let Some(art) = art.filter(|art| art.intersects(area)) else {
-        return fit(area);
-    };
-    let below_y = art
-        .bottom()
-        .saturating_add(ART_GAP_BELOW)
-        .clamp(area.y, area.bottom());
-    let above_bottom = art.y.clamp(area.y, area.bottom());
-    let left_right = art.x.saturating_sub(ART_GAP_X).clamp(area.x, area.right());
-    let right_x = art
-        .right()
-        .saturating_add(ART_GAP_X)
-        .clamp(area.x, area.right());
-    let regions = [
-        Rect::new(area.x, below_y, area.width, area.bottom() - below_y),
-        Rect::new(area.x, area.y, left_right - area.x, area.height),
-        Rect::new(right_x, area.y, area.right() - right_x, area.height),
-        Rect::new(area.x, area.y, area.width, above_bottom - area.y),
-    ];
-
-    if let Some(region) = regions
-        .iter()
-        .copied()
-        .find(|region| region.width >= NORMAL_MIN_WIDTH && region.height >= NORMAL_MIN_HEIGHT)
-    {
-        return fit(region);
-    }
-
-    regions
-        .into_iter()
-        .filter(|region| region.width > 0 && region.height > 0)
-        .max_by_key(|region| u32::from(region.width) * u32::from(region.height))
-        .map_or_else(|| fit(area), fit)
+        .min(region.height);
+    Rect::new(
+        region.x + region.width.saturating_sub(width) / 2,
+        region.y + region.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }
 
 fn render_header(f: &mut Frame, app: &App, out: &mut FrameOut, theme: Theme, area: Rect) {
@@ -395,10 +378,10 @@ mod tests {
     fn equalizer_sits_below_the_cover_when_the_pane_has_room() {
         let pane = Rect::new(80, 4, 180, 54);
         let art = Rect::new(154, 19, 32, 14);
-        let equalizer = equalizer_rect(pane, Some(art));
+        let equalizer = equalizer_rect(pane, true);
 
         assert!(!equalizer.intersects(art));
-        assert!(equalizer.y >= art.bottom() + ART_GAP_BELOW);
+        assert!(equalizer.y >= art.bottom() + ART_METADATA_ROWS);
         assert!(equalizer.width >= NORMAL_MIN_WIDTH);
         assert!(equalizer.height >= NORMAL_MIN_HEIGHT);
     }
@@ -406,8 +389,8 @@ mod tests {
     #[test]
     fn compact_equalizer_still_avoids_art_on_a_small_pane() {
         let pane = Rect::new(0, 0, 40, 25);
-        let art = Rect::new(10, 10, 20, 15);
-        let equalizer = equalizer_rect(pane, Some(art));
+        let art = Rect::new(10, 3, 20, 9);
+        let equalizer = equalizer_rect(pane, true);
 
         assert!(!equalizer.intersects(art));
         assert!(equalizer.width > 0);
