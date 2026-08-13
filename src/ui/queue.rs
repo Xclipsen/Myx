@@ -3,6 +3,7 @@
 use crate::*;
 
 pub(crate) fn render_queue_view(f: &mut Frame, app: &App, theme: Theme, area: Rect) {
+    f.render_widget(Block::default().style(theme.panel()), area);
     let inner = area.inner(Margin::new(2, 1));
     if inner.height == 0 {
         return;
@@ -20,22 +21,6 @@ pub(crate) fn render_queue_view(f: &mut Frame, app: &App, theme: Theme, area: Re
                     .fg(theme.primary.into())
                     .add_modifier(Modifier::BOLD),
             ),
-        ]));
-        lines.push(Line::raw(""));
-    }
-
-    // Now playing — the current track, above the up-next list.
-    if let Some(n) = app.playback.now.as_ref() {
-        lines.push(Line::from(Span::styled("NOW PLAYING", theme.heading())));
-        lines.push(Line::from(vec![
-            Span::styled("   ", theme.muted()),
-            Span::styled(
-                truncate(&n.title, max.saturating_sub(3)),
-                Style::default()
-                    .fg(theme.text.into())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  {}", n.artist), theme.muted()),
         ]));
         lines.push(Line::raw(""));
     }

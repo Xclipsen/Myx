@@ -341,12 +341,13 @@ async fn boot(
         let _ = engine.play_context(uri.clone(), false);
     }
 
-    let restore_on_startup = should_restore_saved_playback(
+    let restore_enabled = myx::config::get().restore_on_startup && startup_uri.is_none();
+    let restore_saved = should_restore_saved_playback(
         myx::config::get().restore_on_startup,
         startup_uri.as_deref(),
         &saved,
     );
-    let now = restore_on_startup
+    let now = restore_saved
         .then_some(saved.last_played.as_ref())
         .flatten()
         .map(|last_played| NowPlaying {
@@ -361,7 +362,7 @@ async fn boot(
             cover: None,
         });
     let restore_uri = now.as_ref().map(|track| track.uri.clone());
-    let (queue, queue_uris, source, source_name) = if restore_on_startup {
+    let (queue, queue_uris, source, source_name) = if restore_saved {
         (
             saved.queue,
             saved.queue_uris,
@@ -439,6 +440,7 @@ async fn boot(
             searching: false,
             in_flight: false,
             search_results: Vec::new(),
+            playlist_results: None,
         },
         view: ViewState {
             mode: RightView::NowPlaying,
@@ -446,10 +448,13 @@ async fn boot(
             lyrics: Vec::new(),
             lyrics_synced: false,
             actions: None,
+            action_anchor: None,
         },
         session: SessionState {
             restore_uri,
+            restore_on_startup: restore_enabled,
             pending_meta: None,
+            reclaimed: false,
             last_ctrl_c: None,
             last_click: None,
         },
@@ -475,6 +480,7 @@ struct UiChannels {
     detail: flume::Sender<(String, String, Vec<LibItem>)>,
     menu: flume::Sender<ActionMenu>,
     astatus: flume::Sender<String>,
+    pstate: flume::Sender<RestoreOutcome>,
     radio: flume::Sender<Result<Radio, String>>,
     libdone: flume::Sender<bool>,
 }
@@ -503,6 +509,7 @@ async fn run_ui(
     let (detail_tx, detail_rx) = flume::unbounded::<(String, String, Vec<LibItem>)>();
     let (menu_tx, menu_rx) = flume::unbounded::<ActionMenu>();
     let (astatus_tx, astatus_rx) = flume::unbounded::<String>();
+    let (pstate_tx, pstate_rx) = flume::unbounded::<RestoreOutcome>();
     let (radio_tx, radio_rx) = flume::unbounded::<Result<Radio, String>>();
     let (libdone_tx, libdone_rx) = flume::unbounded::<bool>();
     let (souvlaki_tx, souvlaki_rx) = flume::unbounded::<MediaControlEvent>();
@@ -515,6 +522,7 @@ async fn run_ui(
         detail: detail_tx,
         menu: menu_tx,
         astatus: astatus_tx,
+        pstate: pstate_tx,
         radio: radio_tx,
         libdone: libdone_tx,
     };
@@ -524,9 +532,22 @@ async fn run_ui(
         chans.libdone.clone(),
     );
 
-    if app.playback.now.is_some() {
-        resume_source(&mut app, &chans.radio);
-        app.transport.playback_started = true;
+    // The local snapshot is what Myx was actually playing when it closed, so it
+    // wins over Spotify's server-side state, which may belong to another device.
+    // Only reclaim that live state when no local track exists.
+    if app.session.restore_on_startup {
+        if app.playback.now.is_some() {
+            resume_source(&mut app, &chans.radio);
+            app.transport.playback_started = true;
+        } else {
+            // `spawn_restore` sends once and exits. Keep the sender in `chans`,
+            // or a disconnected receiver would spin the select loop forever.
+            spawn_restore(
+                app.svc.webapi.clone(),
+                app.svc.engine.device_id(),
+                chans.pstate.clone(),
+            );
+        }
     }
 
     // Re-enrich the restored last-played track (cover / theme / lyrics).
@@ -566,7 +587,7 @@ async fn run_ui(
     // Nothing is on screen yet, so the first tick must draw.
     let mut dirty = true;
     let mut last_layout = (app.view.mode, app.view.zen);
-    let mut overlay_open = app.view.actions.is_some();
+    let mut art_overlay_open = app.view.actions.is_some() && app.view.action_anchor.is_none();
     // What the renderer writes. Lives across frames: the hit rects are what the
     // mouse handler reads between draws, and `lib_offset` is fed back into the
     // next frame's sticky-viewport calculation.
@@ -622,13 +643,15 @@ async fn run_ui(
                             }
                             app.transport.playback_started = true;
                             app.status = "radio started".to_string();
-                            // Grab the freshly-populated station queue shortly after.
-                            let webapi = app.svc.webapi.clone();
-                            let tx = chans.queue.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(Duration::from_millis(1500)).await;
-                                spawn_queue_fetch(webapi, tx);
-                            });
+                            if app.view.mode == RightView::Queue {
+                                // Grab the freshly-populated station queue shortly after.
+                                let webapi = app.svc.webapi.clone();
+                                let tx = chans.queue.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                                    spawn_queue_fetch(webapi, tx);
+                                });
+                            }
                         }
                         Ok(_) => {
                             app.status = "radio: no tracks returned".to_string();
@@ -650,18 +673,18 @@ async fn run_ui(
                     dirty = true;
                 }
                 if (app.view.mode, app.view.zen) != last_layout {
-                    last_layout = (app.view.mode, app.view.zen);
-                    app.art_repaint = ArtRepaint::Wipe;
+                    let new_layout = (app.view.mode, app.view.zen);
+                    app.art_repaint = repaint_for_layout_change(last_layout, new_layout);
+                    last_layout = new_layout;
                     dirty = true;
                 }
-                // An overlay draws over the art and the terminal loses those
-                // pixels, so the cover has to be sent again once it closes.
-                // Opening one must not wipe: the image would be redrawn a frame
-                // later, back on top of the popup.
-                let overlay = app.view.actions.is_some();
-                if overlay != overlay_open {
-                    overlay_open = overlay;
-                    if !overlay {
+                // The centered actions overlay can cover the art, so the cover
+                // has to be sent again once it closes. The compact mouse popup
+                // stays in the library pane and must not make the cover flash.
+                let art_overlay = app.view.actions.is_some() && app.view.action_anchor.is_none();
+                if art_overlay != art_overlay_open {
+                    art_overlay_open = art_overlay;
+                    if !art_overlay {
                         app.art_repaint = ArtRepaint::Wipe;
                     }
                     dirty = true;
@@ -685,7 +708,7 @@ async fn run_ui(
                     last_sync = Instant::now();
                     // Refresh the live queue while playing so the snapshot stays
                     // current, then persist it (survives reboot).
-                    if app.transport.playback_started {
+                    if app.transport.playback_started || app.session.reclaimed {
                         spawn_queue_fetch(app.svc.webapi.clone(), chans.queue.clone());
                     }
                     save_state(&app);
@@ -694,6 +717,19 @@ async fn run_ui(
             }
             ev = ev_rx.recv_async() => {
                 let Ok(ev) = ev else { break };
+                if let EngineEvent::TrackChanged { uri } = &ev {
+                    advance_queue(&mut app.transport.queue, &mut app.transport.queue_uris, uri);
+                    if app.view.mode == RightView::Queue {
+                        let webapi = app.svc.webapi.clone();
+                        let tx = chans.queue.clone();
+                        tokio::spawn(async move {
+                            // Connect emits TrackChanged before Spotify's queue
+                            // endpoint always reflects the transition.
+                            tokio::time::sleep(Duration::from_millis(750)).await;
+                            spawn_queue_fetch(webapi, tx);
+                        });
+                    }
+                }
                 handle_engine_event(&mut app, ev, &chans.meta);
                 true
             }
@@ -773,6 +809,7 @@ async fn run_ui(
             }
             d = detail_rx.recv_async() => {
                 if let Ok((context_uri, title, items)) = d {
+                    app.search.playlist_results = None;
                     app.browse.details.push(Detail { context_uri, title, items, parent_selected: app.browse.selected });
                     app.browse.selected = app.first_selectable();
                     app.status.clear();
@@ -793,7 +830,53 @@ async fn run_ui(
                 true
             }
             st = astatus_rx.recv_async() => {
-                if let Ok(msg) = st { app.status = msg; }
+                if let Ok(msg) = st {
+                    if msg == "added to queue" && app.view.mode == RightView::Queue {
+                        let webapi = app.svc.webapi.clone();
+                        let tx = chans.queue.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            spawn_queue_fetch(webapi, tx);
+                        });
+                    }
+                    app.status = msg;
+                }
+                true
+            }
+            ps = pstate_rx.recv_async() => {
+                if let Ok(outcome) = ps {
+                    match outcome {
+                        RestoreOutcome::Reclaimed(state) => {
+                            app.session.reclaimed = true;
+                            app.transport.playback_started = true;
+                            app.transport.shuffle = state.shuffle;
+                            app.transport.repeat = state.repeat;
+                            app.transport.volume = state.volume.min(100);
+                            let _ = app.svc.engine.set_volume(vol_u16(app.transport.volume));
+                            app.playback.now = Some(NowPlaying {
+                                uri: format!("spotify:track:{}", state.track_id),
+                                title: String::new(),
+                                artist: String::new(),
+                                album: String::new(),
+                                duration_ms: 0,
+                                position_ms: state.progress_ms,
+                                position_at: Instant::now(),
+                                is_playing: true,
+                                cover: None,
+                            });
+                            let webapi = app.svc.webapi.clone();
+                            let tx = chans.meta.clone();
+                            let id = state.track_id.clone();
+                            app.session.pending_meta = Some(format!("spotify:track:{id}"));
+                            tokio::task::spawn_blocking(move || { let _ = tx.send(fetch_track_meta(&webapi, &id)); });
+                        }
+                        RestoreOutcome::Unavailable if app.playback.now.is_some() => {
+                            resume_source(&mut app, &chans.radio);
+                            app.transport.playback_started = true;
+                        }
+                        RestoreOutcome::Unavailable => {}
+                    }
+                }
                 true
             }
         };
@@ -809,6 +892,15 @@ async fn run_ui(
     #[cfg(not(all(feature = "mxc", unix)))]
     {
         Ok(())
+    }
+}
+
+pub(crate) fn advance_queue(queue: &mut Vec<String>, uris: &mut Vec<String>, current_uri: &str) {
+    if uris.first().is_some_and(|uri| uri == current_uri) {
+        uris.remove(0);
+        if !queue.is_empty() {
+            queue.remove(0);
+        }
     }
 }
 

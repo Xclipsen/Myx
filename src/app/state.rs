@@ -82,6 +82,7 @@ pub(crate) struct SearchState {
     // list renders "searching…" instead of "(empty)" while it's set.
     pub(crate) in_flight: bool,
     pub(crate) search_results: Vec<LibItem>,
+    pub(crate) playlist_results: Option<Vec<LibItem>>,
 }
 
 impl SearchState {
@@ -110,16 +111,22 @@ pub(crate) struct ViewState {
     pub(crate) lyrics_synced: bool,
     // Context actions menu overlay (opened with `a`).
     pub(crate) actions: Option<ActionMenu>,
+    // Mouse position for a compact context popup; `None` keeps the centered
+    // keyboard-driven actions overlay.
+    pub(crate) action_anchor: Option<(u16, u16)>,
 }
 
 /// Cross-cutting session bookkeeping: which metadata fetch is still in flight
 /// and the input timestamps that make Ctrl-C and double-click work.
 pub(crate) struct SessionState {
     pub(crate) restore_uri: Option<String>,
+    pub(crate) restore_on_startup: bool,
     // Track URI whose metadata was last requested. Fetches run on separate
     // blocking tasks and can land out of order when skipping quickly, so a
     // reply for any other track is stale and must be dropped.
     pub(crate) pending_meta: Option<String>,
+    // Whether we reclaimed a live server-side session (vs. local fallback).
+    pub(crate) reclaimed: bool,
     // Timestamp of last Ctrl-C — a second press within 1.5s quits.
     pub(crate) last_ctrl_c: Option<Instant>,
     pub(crate) last_click: Option<(u16, Instant)>,
