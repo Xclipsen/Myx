@@ -20,6 +20,7 @@
 - When the user says "main", "auf main", or "mein Main-MYX", integrate the requested work into `fork/main`, run the full relevant verification suite, and install that result as the `myx` executable.
 - Never infer an upstream pull request from a feature being present on `fork/main`. Open or update an upstream pull request only when the user explicitly asks for one.
 - Keep a separate `myx-testing` executable for experimental feature builds. Updating `myx-testing` must not replace the installed `myx` build unless the user explicitly promotes the feature to personal main.
+- When the user says a feature should stay "local", keep it uncommitted and unpushed in the local working tree, install it only as `myx-testing`, and do not create or update any pull request unless the user later explicitly asks for promotion.
 - Before promoting work to personal main, bring in the latest compatible upstream main, preserve personal-only features, resolve every conflict, and run formatting, Clippy, tests, and applicable feature builds.
 - On sufficiently wide terminals, personal main keeps the Now Playing layout with the library on the left, playback in the center, and the live queue on the right; narrow terminals retain the responsive single-pane fallback.
 
