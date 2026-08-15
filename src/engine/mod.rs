@@ -10,6 +10,7 @@
 //! © 2021 Thang Pham), stripped to just what myx needs.
 
 pub mod auth;
+mod playlist;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -30,6 +31,7 @@ use librespot_playback::mixer::{Mixer, MixerConfig};
 use librespot_playback::player::{self, Player};
 
 use crate::audio::{VisBands, VisualizationSink};
+pub use playlist::{playlist_tracks, PlaylistTrack};
 
 /// A normalized playback event surfaced to the rest of the app.
 #[derive(Debug, Clone)]
