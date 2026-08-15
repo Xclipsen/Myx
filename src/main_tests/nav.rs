@@ -11,6 +11,13 @@ fn library_row_at_maps_pointer_through_scroll_offset() {
 }
 
 #[test]
+fn queue_rows_map_to_the_rendered_queue_index() {
+    let rows = [(0, Rect::new(40, 8, 20, 1)), (1, Rect::new(40, 9, 20, 1))];
+    assert_eq!(queue_row_at(&rows, 45, 9), Some(1));
+    assert_eq!(queue_row_at(&rows, 39, 9), None);
+}
+
+#[test]
 fn context_popup_stays_inside_the_screen() {
     let menu = ActionMenu {
         title: "Song".to_string(),
@@ -333,6 +340,31 @@ fn resizing_now_playing_still_clears_the_old_cover_footprint() {
         ),
         ArtRepaint::Wipe
     );
+}
+
+#[test]
+fn jam_footprint_changes_when_an_active_session_ends_inside_the_popup() {
+    let mut jam = JamState::new(true);
+    assert_eq!(jam_overlay_footprint(&jam), None);
+
+    jam.overlay = Some(JamOverlay::default());
+    let empty = jam_overlay_footprint(&jam);
+    jam.session = Some(JamSession {
+        is_owner: true,
+        members: vec![Default::default(), Default::default()],
+        ..JamSession::default()
+    });
+    jam.qr = vec!["qr".repeat(20); 21];
+    let active = jam_overlay_footprint(&jam);
+    assert_ne!(active, empty);
+    assert!(jam_overlay_needs_art_restore(empty, active));
+    assert!(!jam_overlay_needs_art_restore(None, active));
+
+    jam.session = None;
+    jam.qr.clear();
+    assert_eq!(jam_overlay_footprint(&jam), empty);
+    assert!(jam_overlay_needs_art_restore(active, empty));
+    assert!(!jam_overlay_needs_art_restore(empty, None));
 }
 
 // ----------------------------------------------------------- should_draw

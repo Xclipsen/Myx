@@ -9,12 +9,14 @@
 
 mod actions;
 mod equalizer;
+mod jam;
 mod key;
 mod media;
 mod mouse;
 
 pub(crate) use actions::*;
 pub(crate) use equalizer::*;
+pub(crate) use jam::*;
 pub(crate) use key::*;
 pub(crate) use media::*;
 pub(crate) use mouse::*;

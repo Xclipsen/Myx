@@ -126,6 +126,153 @@ pub(crate) struct EqualizerOverlay {
     pub(crate) selected_band: usize,
 }
 
+/// Runtime-only Jam state. Nothing here is persisted: Spotify remains the
+/// authority for membership, permissions and the invitation token.
+pub(crate) struct JamState {
+    pub(crate) enabled: bool,
+    pub(crate) known: bool,
+    pub(crate) loading: bool,
+    pub(crate) session: Option<JamSession>,
+    pub(crate) overlay: Option<JamOverlay>,
+    pub(crate) message: String,
+    pub(crate) qr: Vec<String>,
+}
+
+impl JamState {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            known: false,
+            loading: false,
+            session: None,
+            overlay: None,
+            message: String::new(),
+            qr: Vec::new(),
+        }
+    }
+
+    pub(crate) fn set_session(&mut self, mut session: Option<JamSession>) {
+        if let (Some(next), Some(previous)) = (session.as_mut(), self.session.as_ref()) {
+            next.merge_known_controls_from(previous);
+        }
+        let previous_invite = self.session.as_ref().and_then(JamSession::share_url);
+        let invite = session.as_ref().and_then(JamSession::share_url);
+        if previous_invite != invite {
+            self.qr = invite.as_deref().map(terminal_qr).unwrap_or_default();
+        }
+        self.session = session;
+        self.known = true;
+        if let Some(overlay) = self.overlay.as_mut() {
+            overlay.selected_member = overlay.selected_member.min(
+                self.session
+                    .as_ref()
+                    .map_or(0, |s| s.members.len().saturating_sub(1)),
+            );
+        }
+    }
+}
+
+pub(crate) struct JamOverlay {
+    pub(crate) screen: JamScreen,
+    pub(crate) join_input: tui_textarea::TextArea<'static>,
+    pub(crate) participation: JamType,
+    pub(crate) selected_member: usize,
+}
+
+impl Default for JamOverlay {
+    fn default() -> Self {
+        Self {
+            screen: JamScreen::Overview,
+            join_input: tui_textarea::TextArea::default(),
+            participation: JamType::InPerson,
+            selected_member: 0,
+        }
+    }
+}
+
+impl JamOverlay {
+    pub(crate) fn query(&self) -> &str {
+        self.join_input.lines().first().map_or("", String::as_str)
+    }
+
+    pub(crate) fn clear_query(&mut self) {
+        self.join_input = tui_textarea::TextArea::default();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JamScreen {
+    Overview,
+    Join,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum JamOperation {
+    Refresh,
+    Start,
+    Join {
+        invite: String,
+        participation: JamType,
+    },
+    End {
+        session_id: String,
+    },
+    Leave {
+        session_id: String,
+    },
+    Kick {
+        session_id: String,
+        member_id: String,
+    },
+    QueueOnly(bool),
+    ParticipantVolume(bool),
+}
+
+impl JamOperation {
+    pub(crate) fn pending_label(&self) -> &'static str {
+        match self {
+            Self::Refresh => "refreshing Jam…",
+            Self::Start => "starting Jam…",
+            Self::Join { .. } => "joining Jam…",
+            Self::End { .. } => "ending Jam…",
+            Self::Leave { .. } => "leaving Jam…",
+            Self::Kick { .. } => "removing guest…",
+            Self::QueueOnly(_) | Self::ParticipantVolume(_) => "updating Jam controls…",
+        }
+    }
+
+    pub(crate) fn success_label(&self) -> &'static str {
+        match self {
+            Self::Refresh => "",
+            Self::Start => "Jam started",
+            Self::Join { .. } => "joined Jam",
+            Self::End { .. } => "Jam ended",
+            Self::Leave { .. } => "left Jam",
+            Self::Kick { .. } => "guest removed",
+            Self::QueueOnly(_) | Self::ParticipantVolume(_) => "Jam controls updated",
+        }
+    }
+}
+
+pub(crate) struct JamReply {
+    pub(crate) operation: JamOperation,
+    pub(crate) result: Result<Option<JamSession>, String>,
+}
+
+fn terminal_qr(invite: &str) -> Vec<String> {
+    if invite.is_empty() {
+        return Vec::new();
+    }
+    std::process::Command::new("qrencode")
+        .args(["-t", "UTF8", "-m", "4", "-o", "-", invite])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|qr| qr.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// Cross-cutting session bookkeeping: which metadata fetch is still in flight
 /// and the input timestamps that make Ctrl-C and double-click work.
 pub(crate) struct SessionState {
@@ -137,6 +284,10 @@ pub(crate) struct SessionState {
     pub(crate) pending_meta: Option<String>,
     // Whether we reclaimed a live server-side session (vs. local fallback).
     pub(crate) reclaimed: bool,
+    // `Some` while the access-point watchdog is reconnecting. The value
+    // remembers whether playback was running before the first retry; repeated
+    // reconnect notices must not overwrite that intent after we freeze the UI.
+    pub(crate) resume_after_reconnect: Option<bool>,
     // Timestamp of last Ctrl-C — a second press within 1.5s quits.
     pub(crate) last_ctrl_c: Option<Instant>,
     pub(crate) last_click: Option<(u16, Instant)>,

@@ -10,6 +10,11 @@ pub(crate) fn handle_mouse(
     m: crossterm::event::MouseEvent,
     chans: &UiChannels,
 ) -> bool {
+    // Jam is modal and intentionally keyboard-first. Do not let a click through
+    // to playback, the queue or a library row underneath it.
+    if app.jam.overlay.is_some() {
+        return false;
+    }
     // The equalizer is modal: its own hit rects get first refusal and every
     // other mouse event is swallowed so nothing hidden behind it moves.
     if app.view.equalizer.is_some() {
@@ -123,6 +128,16 @@ pub(crate) fn handle_mouse(
                 }
             }
         }
+        // A queue row starts that track and keeps everything after it as the
+        // new playback context. The displayed queue is already ordered, so do
+        // not reshuffle it even when the global shuffle toggle is active.
+        if !consumed && is_down {
+            let queue_index = queue_row_at(&out.hits.queue, m.column, m.row);
+            if let Some(index) = queue_index {
+                play_queue_item(app, index);
+                consumed = true;
+            }
+        }
         // View-tab click -> switch the right pane.
         if !consumed && is_down {
             let hit = out
@@ -215,6 +230,42 @@ pub(crate) fn handle_mouse(
 }
 
 pub(crate) fn library_row_at(rect: Rect, offset: usize, column: u16, row: u16) -> Option<usize> {
-    (column >= rect.x && column < rect.right() && row >= rect.y && row < rect.bottom())
-        .then(|| offset + (row - rect.y) as usize)
+    point_in_rect(rect, column, row).then(|| offset + (row - rect.y) as usize)
+}
+
+pub(crate) fn queue_row_at(rows: &[(usize, Rect)], column: u16, row: u16) -> Option<usize> {
+    rows.iter()
+        .find(|(_, rect)| point_in_rect(*rect, column, row))
+        .map(|(index, _)| *index)
+}
+
+fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
+    column >= rect.x && column < rect.right() && row >= rect.y && row < rect.bottom()
+}
+
+fn play_queue_item(app: &mut App, index: usize) {
+    let Some(uri) = app.transport.queue_uris.get(index).cloned() else {
+        return;
+    };
+    let title = app
+        .transport
+        .queue
+        .get(index)
+        .cloned()
+        .unwrap_or_else(|| "queue track".to_string());
+    let tracks = app.transport.queue_uris[index..].to_vec();
+
+    app.status = format!("starting {title}…");
+    match app.svc.engine.play_tracks(tracks, Some(uri), 0, false) {
+        Ok(()) => {
+            let displayed_through = (index + 1).min(app.transport.queue.len());
+            app.transport.queue.drain(..displayed_through);
+            app.transport.queue_uris.drain(..=index);
+            app.transport.source = PlaySource::None;
+            app.transport.source_name = "Queue".to_string();
+            app.transport.playback_started = true;
+            app.session.reclaimed = false;
+        }
+        Err(error) => app.status = format!("couldn't play: {error:#}"),
+    }
 }

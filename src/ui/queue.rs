@@ -2,7 +2,13 @@
 
 use crate::*;
 
-pub(crate) fn render_queue_view(f: &mut Frame, app: &App, theme: Theme, area: Rect) {
+pub(crate) fn render_queue_view(
+    f: &mut Frame,
+    app: &App,
+    out: &mut FrameOut,
+    theme: Theme,
+    area: Rect,
+) {
     f.render_widget(Block::default().style(theme.panel()), area);
     let inner = area.inner(Margin::new(2, 1));
     if inner.height == 0 {
@@ -39,6 +45,10 @@ pub(crate) fn render_queue_view(f: &mut Frame, app: &App, theme: Theme, area: Re
             .take(inner.height.saturating_sub(used as u16) as usize)
             .enumerate()
         {
+            out.hits.queue.push((
+                i,
+                Rect::new(inner.x, inner.y + lines.len() as u16, inner.width, 1),
+            ));
             lines.push(Line::from(vec![
                 Span::styled(format!("{:>2}  ", i + 1), theme.muted()),
                 Span::styled(

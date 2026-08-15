@@ -6,6 +6,7 @@
 
 mod equalizer;
 mod footer;
+mod jam;
 mod library;
 mod lyrics;
 mod nowplaying;
@@ -15,6 +16,7 @@ mod visualizer;
 
 pub(crate) use equalizer::*;
 pub(crate) use footer::*;
+pub(crate) use jam::*;
 pub(crate) use library::*;
 pub(crate) use lyrics::*;
 pub(crate) use nowplaying::*;
@@ -29,6 +31,7 @@ const ZEN_QUEUE_SPLIT_MIN_WIDTH: u16 = 52;
 
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
     out.art = None;
+    out.hits.queue.clear();
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
@@ -105,7 +108,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
                     .spacing(2)
                     .split(body_area);
             render_nowplaying_view(f, app, out, theme, panes[0], repaint);
-            render_queue_view(f, app, theme, panes[1]);
+            render_queue_view(f, app, out, theme, panes[1]);
             panes[0]
         } else {
             match app.view.mode {
@@ -113,7 +116,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
                     render_nowplaying_view(f, app, out, theme, body_area, repaint)
                 }
                 RightView::Lyrics => render_lyrics(f, app, theme, body_area),
-                RightView::Queue => render_queue_view(f, app, theme, body_area),
+                RightView::Queue => render_queue_view(f, app, out, theme, body_area),
             }
             body_area
         }
@@ -129,7 +132,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         .split(body_area);
         render_library(f, app, out, theme, panes[0]);
         render_nowplaying_view(f, app, out, theme, panes[1], repaint);
-        render_queue_view(f, app, theme, panes[2]);
+        render_queue_view(f, app, out, theme, panes[2]);
         panes[1]
     } else {
         let body = Layout::horizontal([Constraint::Percentage(30), Constraint::Min(24)])
@@ -139,7 +142,7 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         match app.view.mode {
             RightView::NowPlaying => render_nowplaying_view(f, app, out, theme, body[1], repaint),
             RightView::Lyrics => render_lyrics(f, app, theme, body[1]),
-            RightView::Queue => render_queue_view(f, app, theme, body[1]),
+            RightView::Queue => render_queue_view(f, app, out, theme, body[1]),
         }
         body[1]
     };
@@ -147,7 +150,10 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
     render_now_strip(f, app, out, theme, rows[4]);
     render_footer(f, app, theme, rows[5]);
 
-    if app.view.actions.is_some() {
+    if app.jam.overlay.is_some() {
+        out.hits.actions.clear();
+        render_jam_overlay(f, app, theme, area);
+    } else if app.view.actions.is_some() {
         render_actions_overlay(f, app, out, theme, area);
     } else {
         out.hits.actions.clear();

@@ -18,6 +18,8 @@ pub struct Config {
     /// when the startup query misfires and the art comes out as a mosaic.
     /// `MYX_PROTOCOL` takes precedence.
     pub protocol: Option<String>,
+    /// Opt in to the private, unsupported Spotify Jam protocol.
+    pub experimental_jam: bool,
 }
 
 impl Default for Config {
@@ -27,6 +29,7 @@ impl Default for Config {
             restore_on_startup: true,
             client_id: None,
             protocol: None,
+            experimental_jam: false,
         }
     }
 }
@@ -56,6 +59,10 @@ const TEMPLATE: &str = "\
 # Leave it commented to auto-detect; set it if album art comes out as a coarse
 # mosaic, which means the detection query went unanswered.
 #protocol = \"kitty\"
+
+# Experimental: Spotify does not publish a Jam API. This may stop working when
+# Spotify changes its private social-connect protocol.
+#experimental_jam = false
 ";
 
 impl Config {
@@ -99,15 +106,19 @@ mod tests {
         assert_eq!(c.scrolloff, 3);
         assert!(c.restore_on_startup);
         assert!(c.client_id.is_none());
+        assert!(!c.experimental_jam);
     }
 
     #[test]
     fn reads_keys() {
-        let c = Config::parse("scrolloff = 5\nrestore_on_startup = false\nclient_id = \"abc\"")
-            .expect("valid toml");
+        let c = Config::parse(
+            "scrolloff = 5\nrestore_on_startup = false\nclient_id = \"abc\"\nexperimental_jam = true",
+        )
+        .expect("valid toml");
         assert_eq!(c.scrolloff, 5);
         assert!(!c.restore_on_startup);
         assert_eq!(c.client_id.as_deref(), Some("abc"));
+        assert!(c.experimental_jam);
     }
 
     #[test]
@@ -132,6 +143,7 @@ mod tests {
         assert_eq!(c.restore_on_startup, d.restore_on_startup);
         assert!(c.client_id.is_none());
         assert!(c.protocol.is_none());
+        assert!(!c.experimental_jam);
     }
 
     #[test]

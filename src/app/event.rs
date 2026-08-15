@@ -6,6 +6,7 @@ pub(crate) fn handle_engine_event(
     app: &mut App,
     ev: EngineEvent,
     meta_tx: &flume::Sender<TrackMeta>,
+    radio_tx: &flume::Sender<Result<Radio, String>>,
 ) {
     // Position ticks would bury everything else in the log.
     if !matches!(ev, EngineEvent::PositionCorrection { .. }) {
@@ -82,20 +83,61 @@ pub(crate) fn handle_engine_event(
             }
         }
         EngineEvent::Reconnecting => {
+            let was_playing = app.transport.playback_started
+                && app.playback.now.as_ref().is_some_and(|now| now.is_playing);
+            if begin_reconnect(&mut app.session.resume_after_reconnect, was_playing) && was_playing
+            {
+                // Stop extrapolating the playhead while there is no audio. This
+                // frozen value is the position `resume_source` reloads later.
+                app.playback.set_playing_locally(false);
+            }
             app.status = "connection dropped — reconnecting…".to_string();
         }
         EngineEvent::Reconnected => {
-            // The replacement Connect device starts idle, so whatever was
-            // playing is not resumed; say so rather than leave a silent player
-            // looking broken.
-            app.status = if app.transport.playback_started {
-                "reconnected — press play to resume".to_string()
+            let resume = finish_reconnect(&mut app.session.resume_after_reconnect);
+            // The replacement Connect device has no context. A reclaimed
+            // server session is gone too, and a bare Play would be a no-op.
+            app.session.reclaimed = false;
+            app.transport.playback_started = false;
+            if resume {
+                app.status = "reconnected — resuming…".to_string();
+                app.transport.playback_started = resume_source(app, radio_tx);
             } else {
-                "reconnected".to_string()
+                app.status = if app.playback.now.is_some() {
+                    "reconnected — press play to resume".to_string()
+                } else {
+                    "reconnected".to_string()
+                };
+            }
+        }
+        EngineEvent::JamChanged(update) => {
+            app.jam.set_session(update.session);
+            app.jam.loading = false;
+            app.jam.message = match update.reason.as_str() {
+                "USER_JOINED" => "a guest joined".to_string(),
+                "USER_LEFT" | "USER_KICKED" => "participants updated".to_string(),
+                "YOU_WERE_KICKED" => "you were removed from the Jam".to_string(),
+                "SESSION_DELETED" => "Jam ended".to_string(),
+                _ => String::new(),
             };
         }
         EngineEvent::EndOfTrack { .. } => {}
     }
+}
+
+/// Remember the state from the first reconnect notice. The watchdog may emit
+/// another notice after a failed retry; by then the local playhead is frozen
+/// and reports paused, which must not erase the original resume intent.
+fn begin_reconnect(slot: &mut Option<bool>, was_playing: bool) -> bool {
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(was_playing);
+    true
+}
+
+fn finish_reconnect(slot: &mut Option<bool>) -> bool {
+    slot.take().unwrap_or(false)
 }
 
 /// Is this metadata reply the one we are still waiting for?
@@ -266,5 +308,26 @@ pub(crate) fn play_selected_context(app: &mut App, shuffle: bool) {
     match context_target(&item) {
         Some((uri, name)) => app.play_context_row(uri, name, shuffle),
         None => app.status = "not a playlist, album, or artist".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::*;
+
+    #[test]
+    fn retries_keep_the_initial_playing_intent() {
+        let mut state = None;
+        assert!(begin_reconnect(&mut state, true));
+        assert!(!begin_reconnect(&mut state, false));
+        assert!(finish_reconnect(&mut state));
+        assert_eq!(state, None);
+    }
+
+    #[test]
+    fn paused_playback_stays_paused_after_reconnect() {
+        let mut state = None;
+        assert!(begin_reconnect(&mut state, false));
+        assert!(!finish_reconnect(&mut state));
     }
 }

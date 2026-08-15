@@ -24,6 +24,8 @@ pub(crate) struct HitRects {
     pub(crate) lib: Option<Rect>,
     /// Rows in the currently visible actions menu.
     pub(crate) actions: Vec<Rect>,
+    /// Visible queue rows, paired with their index in the live queue.
+    pub(crate) queue: Vec<(usize, Rect)>,
     /// Equalizer overlay controls. Empty whenever that modal is closed.
     pub(crate) eq_toggle: Option<Rect>,
     pub(crate) eq_presets: Vec<(EqualizerPreset, Rect)>,
@@ -52,6 +54,45 @@ pub(crate) struct FrameOut {
     /// stores the result back, which is what makes scrolling sticky. Owned by
     /// `run_ui` so it survives across frames.
     pub(crate) lib_offset: usize,
+}
+
+/// Geometry-relevant Jam popup state. A change while the popup remains open
+/// exposes a different part of the inline cover and requires replaying it
+/// before drawing the resized popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JamOverlayFootprint {
+    screen: JamScreen,
+    owner: Option<bool>,
+    members: usize,
+    qr_width: usize,
+    qr_height: usize,
+}
+
+pub(crate) fn jam_overlay_footprint(jam: &JamState) -> Option<JamOverlayFootprint> {
+    let overlay = jam.overlay.as_ref()?;
+    let (owner, members) = jam.session.as_ref().map_or((None, 0), |session| {
+        (Some(session.is_owner), session.members.len())
+    });
+    let qr_width = jam
+        .qr
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default();
+    Some(JamOverlayFootprint {
+        screen: overlay.screen,
+        owner,
+        members,
+        qr_width,
+        qr_height: jam.qr.len(),
+    })
+}
+
+pub(crate) fn jam_overlay_needs_art_restore(
+    previous: Option<JamOverlayFootprint>,
+    current: Option<JamOverlayFootprint>,
+) -> bool {
+    matches!((previous, current), (Some(previous), Some(current)) if previous != current)
 }
 
 /// What the album art box owes the next frame.
@@ -102,6 +143,9 @@ pub(crate) const ANIM_FRAME: Duration = Duration::from_millis(33);
 pub(crate) const IDLE_REDRAW: Duration = Duration::from_millis(500);
 /// How often the live queue is re-fetched and the session persisted.
 pub(crate) const SYNC_EVERY: Duration = Duration::from_secs(10);
+/// Backup poll for Jam state. Dealer pushes normally make updates immediate;
+/// this recovers if Spotify drops or changes one notification.
+pub(crate) const JAM_SYNC_EVERY: Duration = Duration::from_secs(30);
 
 /// Whether this frame is worth drawing.
 ///

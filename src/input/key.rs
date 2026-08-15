@@ -31,6 +31,11 @@ pub(crate) fn handle_key(
         return false;
     }
 
+    if app.jam.overlay.is_some() {
+        handle_jam_key(app, code, mods, &chans.jam);
+        return false;
+    }
+
     if app.view.equalizer.is_some() {
         handle_equalizer_key(app, code);
         return false;
@@ -84,6 +89,7 @@ pub(crate) fn handle_key(
     }
 
     match code {
+        KeyCode::Char('J') => open_jam(app, &chans.jam),
         KeyCode::Char('e') => {
             app.view.equalizer = Some(EqualizerOverlay::default());
         }
@@ -121,8 +127,7 @@ pub(crate) fn handle_key(
                 app.transport.playback_started = true;
             } else {
                 // Resume the persisted source (context/radio/liked).
-                resume_source(app, &chans.radio);
-                app.transport.playback_started = true;
+                app.transport.playback_started = resume_source(app, &chans.radio);
             }
         }
         KeyCode::Media(MediaKeyCode::Stop) => {
@@ -239,7 +244,14 @@ pub(crate) fn handle_key(
         KeyCode::Enter => match app.activate() {
             Activated::Open(uri, name) => {
                 app.search.playlist_results = None;
-                spawn_detail_fetch(app.svc.webapi.clone(), uri, name, chans.detail.clone());
+                app.status = format!("loading {name}…");
+                spawn_detail_fetch(
+                    app.svc.webapi.clone(),
+                    app.svc.engine.session(),
+                    uri,
+                    name,
+                    chans.detail.clone(),
+                );
             }
             Activated::Radio(uri) => {
                 app.status = "starting radio…".to_string();

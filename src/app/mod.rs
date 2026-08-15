@@ -51,6 +51,7 @@ pub(crate) struct App {
     pub(crate) transport: Transport,
     pub(crate) search: SearchState,
     pub(crate) view: ViewState,
+    pub(crate) jam: JamState,
     pub(crate) session: SessionState,
     // What the album art box owes the next frame. See ArtRepaint.
     pub(crate) art_repaint: ArtRepaint,

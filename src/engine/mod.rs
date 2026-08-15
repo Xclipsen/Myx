@@ -10,6 +10,8 @@
 //! © 2021 Thang Pham), stripped to just what myx needs.
 
 pub mod auth;
+pub mod jam;
+mod playlist;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -31,6 +33,8 @@ use librespot_playback::player::{self, Player};
 
 use crate::audio::equalizer::{shared_equalizer, EqualizerControl, EqualizerSink};
 use crate::audio::{EqualizerSettings, VisBands, VisualizationSink};
+pub use jam::{JamMember, JamSession, JamType, JamUpdate};
+pub use playlist::{playlist_tracks, PlaylistTrack};
 
 /// A normalized playback event surfaced to the rest of the app.
 #[derive(Debug, Clone)]
@@ -51,8 +55,8 @@ pub enum EngineEvent {
     Stopped,
     /// The access point went away and a replacement connection is being built.
     Reconnecting,
-    /// Playback control works again. Whatever was playing is not resumed — the
-    /// new Connect device starts idle.
+    /// Playback control works again. The new Connect device starts idle, so the
+    /// caller must reload its remembered context to resume.
     Reconnected,
     EndOfTrack {
         uri: String,
@@ -61,6 +65,8 @@ pub enum EngineEvent {
         uri: String,
         position_ms: u32,
     },
+    /// A social-connect push changed the active Jam or its participants.
+    JamChanged(JamUpdate),
 }
 
 /// Everything that dies with the access-point connection.
@@ -77,6 +83,7 @@ struct Link {
 
 /// A running engine: keep it alive (dropping it tears down the Connect device),
 /// and read `bands` for the live visualizer.
+#[derive(Clone)]
 pub struct Engine {
     pub bands: Arc<Mutex<VisBands>>,
     inner: Arc<Inner>,
@@ -293,6 +300,38 @@ impl Engine {
     /// A cheap clone of the session (for off-thread mercury calls like radio).
     pub fn session(&self) -> Session {
         self.inner.link().session.clone()
+    }
+
+    pub async fn jam_current(&self) -> Result<Option<JamSession>> {
+        jam::current(&self.session()).await
+    }
+
+    pub async fn jam_start(&self) -> Result<JamSession> {
+        jam::start(&self.session()).await
+    }
+
+    pub async fn jam_end(&self, session_id: &str) -> Result<()> {
+        jam::end(&self.session(), session_id).await
+    }
+
+    pub async fn jam_leave(&self, session_id: &str) -> Result<()> {
+        jam::leave(&self.session(), session_id).await
+    }
+
+    pub async fn jam_kick(&self, session_id: &str, member_id: &str) -> Result<()> {
+        jam::kick(&self.session(), session_id, member_id).await
+    }
+
+    pub async fn jam_set_queue_only(&self, enabled: bool) -> Result<()> {
+        jam::set_queue_only(&self.session(), enabled).await
+    }
+
+    pub async fn jam_set_participant_volume(&self, enabled: bool) -> Result<()> {
+        jam::set_participant_volume(&self.session(), enabled).await
+    }
+
+    pub async fn jam_join(&self, invite: &str, participation: JamType) -> Result<JamSession> {
+        jam::join(&self.session(), invite, participation).await
     }
 }
 
@@ -534,6 +573,23 @@ async fn connect(
     .await
     .context("initialize spirc")?;
     tokio::spawn(spirc_task);
+
+    // Spirc already consumes this topic to keep its Connect session id valid.
+    // Dealer subscriptions fan out, so Myx can independently surface the same
+    // updates to the TUI without patching or forking librespot. Keep the private
+    // protocol completely inert unless explicitly enabled, and never let a Jam
+    // subscription failure take down ordinary playback.
+    if crate::config::get().experimental_jam {
+        let jam_tx = events.clone();
+        match jam::subscribe_with(&session, move |update| {
+            jam_tx.send(EngineEvent::JamChanged(update)).is_ok()
+        }) {
+            Ok(jam_updates) => {
+                tokio::spawn(jam_updates);
+            }
+            Err(error) => log::warn!("Jam live updates unavailable: {error:#}"),
+        }
+    }
 
     Ok(Link {
         spirc,

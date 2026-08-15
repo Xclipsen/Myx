@@ -44,8 +44,7 @@ pub(crate) fn handle_media_control_event(
                 app.transport.playback_started = true;
             } else {
                 // Resume the persisted source (context/radio/liked).
-                resume_source(app, radio_tx);
-                app.transport.playback_started = true;
+                app.transport.playback_started = resume_source(app, radio_tx);
             }
         }
         MediaControlEvent::Play => {
@@ -53,8 +52,7 @@ pub(crate) fn handle_media_control_event(
                 let _ = app.svc.engine.play();
             } else {
                 // Resume the persisted source (context/radio/liked).
-                resume_source(app, radio_tx);
-                app.transport.playback_started = true;
+                app.transport.playback_started = resume_source(app, radio_tx);
             }
         }
         MediaControlEvent::Pause => {

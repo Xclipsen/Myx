@@ -50,7 +50,7 @@ use myx::audio::{
 };
 use myx::components::{gradient_line, gradient_progress, left_bar_block};
 use myx::cover::Cover;
-use myx::engine::{self, Engine, EngineEvent};
+use myx::engine::{self, Engine, EngineEvent, JamSession, JamType};
 use myx::gradient::{self};
 use myx::liblog::{install_librespot_log, liblog};
 use myx::lyrics::parse::parse_lrc;
@@ -457,11 +457,13 @@ async fn boot(
             action_anchor: None,
             equalizer: None,
         },
+        jam: JamState::new(myx::config::get().experimental_jam),
         session: SessionState {
             restore_uri,
             restore_on_startup: restore_enabled,
             pending_meta: None,
             reclaimed: false,
+            resume_after_reconnect: None,
             last_ctrl_c: None,
             last_click: None,
         },
@@ -490,6 +492,7 @@ struct UiChannels {
     pstate: flume::Sender<RestoreOutcome>,
     radio: flume::Sender<Result<Radio, String>>,
     libdone: flume::Sender<bool>,
+    jam: flume::Sender<JamReply>,
 }
 
 async fn run_ui(
@@ -519,6 +522,7 @@ async fn run_ui(
     let (pstate_tx, pstate_rx) = flume::unbounded::<RestoreOutcome>();
     let (radio_tx, radio_rx) = flume::unbounded::<Result<Radio, String>>();
     let (libdone_tx, libdone_rx) = flume::unbounded::<bool>();
+    let (jam_tx, jam_rx) = flume::unbounded::<JamReply>();
     let (souvlaki_tx, souvlaki_rx) = flume::unbounded::<MediaControlEvent>();
     let chans = UiChannels {
         meta: meta_tx,
@@ -532,20 +536,23 @@ async fn run_ui(
         pstate: pstate_tx,
         radio: radio_tx,
         libdone: libdone_tx,
+        jam: jam_tx,
     };
     spawn_library_fetch(
         app.svc.webapi.clone(),
         chans.lib.clone(),
         chans.libdone.clone(),
     );
+    if app.jam.enabled {
+        spawn_jam_operation(&mut app, JamOperation::Refresh, chans.jam.clone());
+    }
 
     // The local snapshot is what Myx was actually playing when it closed, so it
     // wins over Spotify's server-side state, which may belong to another device.
     // Only reclaim that live state when no local track exists.
     if app.session.restore_on_startup {
         if app.playback.now.is_some() {
-            resume_source(&mut app, &chans.radio);
-            app.transport.playback_started = true;
+            app.transport.playback_started = resume_source(&mut app, &chans.radio);
         } else {
             // `spawn_restore` sends once and exits. Keep the sender in `chans`,
             // or a disconnected receiver would spin the select loop forever.
@@ -591,13 +598,20 @@ async fn run_ui(
     frame.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_draw = Instant::now() - IDLE_REDRAW;
     let mut last_sync = Instant::now();
+    let mut last_jam_sync = Instant::now();
     // Nothing is on screen yet, so the first tick must draw.
     let mut dirty = true;
     let mut last_layout = (app.view.mode, app.view.zen);
-    let mut art_overlay_open = app.view.actions.is_some() && app.view.action_anchor.is_none();
+    let mut art_overlay_open = (app.view.actions.is_some() && app.view.action_anchor.is_none())
+        || app.jam.overlay.is_some();
+    let mut last_jam_overlay_footprint = jam_overlay_footprint(&app.jam);
     // A popup overwrites inline-image pixels. Replay the cached cover after the
     // popup-free frame instead of blanking it for one visible frame first.
     let mut restore_art = false;
+    // A Jam popup can shrink while it remains open (most visibly when a session
+    // ends and its QR disappears). Replay the cover first, then draw the new
+    // popup over it, so the old larger footprint cannot survive around it.
+    let mut restore_art_before_overlay = false;
     // What the renderer writes. Lives across frames: the hit rects are what the
     // mouse handler reads between draws, and `lib_offset` is fed back into the
     // next frame's sticky-viewport calculation.
@@ -648,12 +662,24 @@ async fn run_ui(
                     dirty = true;
                     match rad {
                         Ok(radio) if !radio.uris.is_empty() => {
-                            if let Err(e) = app.svc.engine.play_tracks(radio.uris, None, radio.start_position_ms, false) {
-                                app.status = format!("couldn't play radio: {e:#}");
-                            }
-                            app.transport.playback_started = true;
-                            app.status = "radio started".to_string();
-                            if app.view.mode == RightView::Queue {
+                            let started = match app.svc.engine.play_tracks(
+                                radio.uris,
+                                None,
+                                radio.start_position_ms,
+                                false,
+                            ) {
+                                Ok(()) => {
+                                    app.transport.playback_started = true;
+                                    app.status = "radio started".to_string();
+                                    true
+                                }
+                                Err(e) => {
+                                    app.transport.playback_started = false;
+                                    app.status = format!("couldn't play radio: {e:#}");
+                                    false
+                                }
+                            };
+                            if started && app.view.mode == RightView::Queue {
                                 // Grab the freshly-populated station queue shortly after.
                                 let webapi = app.svc.webapi.clone();
                                 let tx = chans.queue.clone();
@@ -664,12 +690,18 @@ async fn run_ui(
                             }
                         }
                         Ok(_) => {
+                            app.transport.playback_started = false;
                             app.status = "radio: no tracks returned".to_string();
                         }
                         Err(e) => {
+                            app.transport.playback_started = false;
                             app.status = format!("radio failed: {e}");
                         }
                     }
+                }
+                while let Ok(reply) = jam_rx.try_recv() {
+                    dirty = true;
+                    apply_jam_reply(&mut app, reply);
                 }
 
                 // The visualizer only animates while it is on screen; on Queue
@@ -688,10 +720,23 @@ async fn run_ui(
                     last_layout = new_layout;
                     dirty = true;
                 }
-                // The centered actions overlay can cover the art, so the cover
-                // has to be restored once it closes. The compact mouse popup
-                // stays in the library pane and does not touch the cover.
-                let art_overlay = app.view.actions.is_some() && app.view.action_anchor.is_none();
+                // Centered overlays can cover the art, so the cover has to be
+                // restored once they close. The compact mouse popup stays in
+                // the library pane and does not touch the cover.
+                let art_overlay = (app.view.actions.is_some()
+                    && app.view.action_anchor.is_none())
+                    || app.jam.overlay.is_some();
+                let jam_overlay_footprint = jam_overlay_footprint(&app.jam);
+                if jam_overlay_footprint != last_jam_overlay_footprint {
+                    if jam_overlay_needs_art_restore(
+                        last_jam_overlay_footprint,
+                        jam_overlay_footprint,
+                    ) {
+                        restore_art_before_overlay = true;
+                    }
+                    last_jam_overlay_footprint = jam_overlay_footprint;
+                    dirty = true;
+                }
                 if art_overlay != art_overlay_open {
                     art_overlay_open = art_overlay;
                     if !art_overlay {
@@ -707,6 +752,21 @@ async fn run_ui(
                     // Terminals that don't know the mode ignore it.
                     let _ = execute!(io::stdout(), BeginSynchronizedUpdate);
                     let repaint = app.art_repaint;
+                    let underlay_restore_result = if restore_art_before_overlay
+                        && art_overlay_open
+                        && app.view.mode == RightView::NowPlaying
+                    {
+                        out.art
+                            .zip(
+                                app.playback
+                                    .now
+                                    .as_ref()
+                                    .and_then(|now| now.cover.as_ref()),
+                            )
+                            .map(|(area, cover)| cover.render_direct(terminal.backend_mut(), area))
+                    } else {
+                        None
+                    };
                     let drawn = terminal
                         .draw(|f| render(f, &app, &mut out, repaint))
                         .map(|_| ());
@@ -729,6 +789,13 @@ async fn run_ui(
                     let _ = execute!(io::stdout(), EndSynchronizedUpdate);
                     drawn?;
                     app.art_repaint = app.art_repaint.advance();
+                    if restore_art_before_overlay {
+                        restore_art_before_overlay = false;
+                        if let Some(Err(err)) = underlay_restore_result {
+                            liblog(format!("cover underlay restore failed: {err}"));
+                            app.art_repaint = ArtRepaint::Wipe;
+                        }
+                    }
                     if restore_art && !art_overlay_open {
                         restore_art = false;
                         if let Some(Err(err)) = restore_result {
@@ -748,6 +815,17 @@ async fn run_ui(
                     }
                     save_state(&app);
                 }
+                if app.jam.enabled
+                    && !app.jam.loading
+                    && last_jam_sync.elapsed() >= JAM_SYNC_EVERY
+                {
+                    last_jam_sync = Instant::now();
+                    spawn_jam_operation(
+                        &mut app,
+                        JamOperation::Refresh,
+                        chans.jam.clone(),
+                    );
+                }
                 false
             }
             ev = ev_rx.recv_async() => {
@@ -765,7 +843,7 @@ async fn run_ui(
                         });
                     }
                 }
-                handle_engine_event(&mut app, ev, &chans.meta);
+                handle_engine_event(&mut app, ev, &chans.meta, &chans.radio);
                 true
             }
             ev = in_rx.recv_async() => {
@@ -906,8 +984,8 @@ async fn run_ui(
                             tokio::task::spawn_blocking(move || { let _ = tx.send(fetch_track_meta(&webapi, &id)); });
                         }
                         RestoreOutcome::Unavailable if app.playback.now.is_some() => {
-                            resume_source(&mut app, &chans.radio);
-                            app.transport.playback_started = true;
+                            app.transport.playback_started =
+                                resume_source(&mut app, &chans.radio);
                         }
                         RestoreOutcome::Unavailable => {}
                     }
@@ -941,7 +1019,7 @@ pub(crate) fn advance_queue(queue: &mut Vec<String>, uris: &mut Vec<String>, cur
 
 /// Resume the persisted playback source at the last track/position — the
 /// faithful reboot resume (real context ⇒ real queue continuation).
-fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>) {
+fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>) -> bool {
     let track = app
         .playback
         .now
@@ -957,12 +1035,16 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
 
     match app.transport.source.clone() {
         PlaySource::Context(ctx) => {
-            if let Err(e) = app
+            match app
                 .svc
                 .engine
                 .play_context_at(ctx, track, pos, app.transport.shuffle)
             {
-                app.status = format!("couldn't play: {e:#}");
+                Ok(()) => true,
+                Err(e) => {
+                    app.status = format!("couldn't play: {e:#}");
+                    false
+                }
             }
         }
         PlaySource::Radio(seed) => {
@@ -985,6 +1067,7 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
                     start_position_ms: pos,
                 }));
             });
+            true
         }
         PlaySource::Liked if !app.browse.library.liked.is_empty() => {
             let uris: Vec<String> = app
@@ -994,12 +1077,16 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
                 .iter()
                 .map(|i| i.uri.clone())
                 .collect();
-            if let Err(e) = app
+            match app
                 .svc
                 .engine
                 .play_tracks(uris, track, pos, app.transport.shuffle)
             {
-                app.status = format!("couldn't play: {e:#}");
+                Ok(()) => true,
+                Err(e) => {
+                    app.status = format!("couldn't play: {e:#}");
+                    false
+                }
             }
         }
         _ => {
@@ -1011,25 +1098,33 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
                     uris.push(u.clone());
                 }
                 uris.extend(app.transport.queue_uris.iter().cloned());
-                if let Err(e) = app
+                match app
                     .svc
                     .engine
                     .play_tracks(uris, track, pos, app.transport.shuffle)
                 {
-                    app.status = format!("couldn't play: {e:#}");
+                    Ok(()) => true,
+                    Err(e) => {
+                        app.status = format!("couldn't play: {e:#}");
+                        false
+                    }
                 }
             } else {
                 match track {
-                    Some(uri) => {
-                        if let Err(e) = app.svc.engine.play_track_at(uri, pos) {
+                    Some(uri) => match app.svc.engine.play_track_at(uri, pos) {
+                        Ok(()) => true,
+                        Err(e) => {
                             app.status = format!("couldn't play: {e:#}");
+                            false
                         }
-                    }
-                    None => {
-                        if let Err(e) = app.svc.engine.play() {
+                    },
+                    None => match app.svc.engine.play() {
+                        Ok(()) => true,
+                        Err(e) => {
                             app.status = format!("couldn't play: {e:#}");
+                            false
                         }
-                    }
+                    },
                 }
             }
         }

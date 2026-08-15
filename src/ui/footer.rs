@@ -37,6 +37,7 @@ pub(crate) fn render_footer(f: &mut Frame, app: &App, theme: Theme, area: Rect) 
         ),
         (false, key("a"), lbl(" actions   ")),
         (false, key("e"), lbl(" eq   ")),
+        (false, key("J"), lbl(" jam   ")),
         (
             false,
             Span::styled("z", Style::default().fg(on(app.view.zen).into())),
@@ -47,6 +48,7 @@ pub(crate) fn render_footer(f: &mut Frame, app: &App, theme: Theme, area: Rect) 
     let line = Line::from(
         hints
             .into_iter()
+            .filter(|(_, k, _)| app.jam.enabled || k.content.as_ref() != "J")
             .filter(|(needs_library, ..)| !needs_library || !app.view.zen)
             .flat_map(|(_, k, label)| [k, label])
             .collect::<Vec<_>>(),
