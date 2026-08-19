@@ -15,6 +15,7 @@
 
 ## Personal Main and Testing Builds
 
+- The user works exclusively on their own fork (`Xclipsen/Myx`). Everything there is fair game to change freely — no need to preserve upstream compatibility, avoid breaking changes, or hold back otherwise-reasonable edits for fear of complicating a future upstream PR.
 - `origin` is the upstream repository (`HaseebKhalid1507/Myx`); `fork` is the user's personal repository (`Xclipsen/Myx`).
 - `fork/main` is the user's personal integration branch. It may contain tested features that are not proposed to upstream and do not have an upstream pull request.
 - When the user says "main", "auf main", or "mein Main-MYX", integrate the requested work into `fork/main`, run the full relevant verification suite, and install that result as the `myx` executable.
