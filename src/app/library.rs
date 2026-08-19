@@ -17,11 +17,16 @@ impl RightView {
             RightView::Queue => "Queue",
         }
     }
-    pub(crate) fn shift(self, delta: isize) -> RightView {
-        let i = RightView::ALL.iter().position(|&v| v == self).unwrap_or(0) as isize;
-        let n = RightView::ALL.len() as isize;
-        RightView::ALL[(i + delta).rem_euclid(n) as usize]
-    }
+}
+
+/// Which list the keyboard drives. The library sidebar and the queue pane are
+/// both navigable lists; `Tab` moves this between them, and the movement keys
+/// (`↑↓` / `j k`) and `Enter` act on whichever one holds it.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Focus {
+    #[default]
+    Library,
+    Queue,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,6 +65,32 @@ impl Section {
         let n = Section::ALL.len() as isize;
         let i = (self.index() as isize + delta).rem_euclid(n) as usize;
         Section::ALL[i]
+    }
+}
+
+/// Where a cursor lands after moving `dir` through a list of `len` rows,
+/// clamped at both ends (no wrap — the ends are walls, as in the library).
+///
+/// Free-standing so the queue's cursor is testable without an `App`; the
+/// library's own `move_sel` keeps its loop, since it also skips headers.
+pub(crate) fn step_cursor(current: usize, len: usize, dir: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let next = current as isize + dir;
+    if next < 0 || next >= len as isize {
+        current
+    } else {
+        next as usize
+    }
+}
+
+/// Pull a cursor back inside a list that may have shrunk under it.
+pub(crate) fn clamp_cursor(current: usize, len: usize) -> usize {
+    if current >= len {
+        len.saturating_sub(1)
+    } else {
+        current
     }
 }
 

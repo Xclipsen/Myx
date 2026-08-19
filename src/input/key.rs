@@ -5,6 +5,7 @@ use crate::*;
 /// Returns true if the app should quit.
 pub(crate) fn handle_key(
     app: &mut App,
+    out: &FrameOut,
     code: KeyCode,
     mods: KeyModifiers,
     chans: &UiChannels,
@@ -83,8 +84,10 @@ pub(crate) fn handle_key(
 
     // Zen hides the library, so the keys that drive one do nothing rather than
     // moving a selection nobody can see. Placed after the overlays above, which
-    // stay usable if one was already open when zen came on.
-    if app.view.zen && drives_library(code) {
+    // stay usable if one was already open when zen came on. The movement keys
+    // are exempt while the queue holds focus: that pane is still on screen in
+    // zen's split, so they are driving something visible.
+    if app.view.zen && !queue_owns_movement(app, code) && drives_library(code, mods) {
         return false;
     }
 
@@ -99,7 +102,11 @@ pub(crate) fn handle_key(
         }
         KeyCode::Char('q') => return true,
         KeyCode::Esc => {
-            if app.search.playlist_results.take().is_some() {
+            if app.view.focus == Focus::Queue {
+                // Esc backs out of the queue before it backs out of anything
+                // in the library underneath it.
+                unfocus_queue(app);
+            } else if app.search.playlist_results.take().is_some() {
                 app.search.clear();
                 app.browse.selected = app.first_selectable();
             } else if let Some(d) = app.browse.details.pop() {
@@ -205,42 +212,41 @@ pub(crate) fn handle_key(
                 }
             }
         }
-        // Tab / Shift+Tab (and [ ]) rotate the library sections.
-        KeyCode::Tab | KeyCode::Char(']') => {
-            app.search.searching = false;
-            app.browse.section = app.browse.section.shift(1);
-            app.browse.selected = app.first_selectable();
-        }
-        KeyCode::BackTab | KeyCode::Char('[') => {
-            app.search.searching = false;
-            app.browse.section = app.browse.section.shift(-1);
-            app.browse.selected = app.first_selectable();
-        }
-        // Arrow keys rotate the right-pane view; Shift+arrows seek ±5s.
+        // Tab / Shift+Tab move the keyboard between the two navigable lists.
+        // Both directions do the same thing — there are only two panes.
+        KeyCode::Tab | KeyCode::BackTab => toggle_focus(app, out, chans),
+        // Shift+arrows seek ±5s; plain arrows (and [ ]) rotate the sections.
         KeyCode::Right if mods.contains(KeyModifiers::SHIFT) => {
             app.playback.seek_step(SEEK_STEP_MS)
         }
         KeyCode::Left if mods.contains(KeyModifiers::SHIFT) => {
             app.playback.seek_step(-SEEK_STEP_MS)
         }
-        KeyCode::Right => {
-            app.view.mode = app.view.mode.shift(1);
-            if app.view.mode == RightView::Queue && app.transport.playback_started {
-                spawn_queue_fetch(app.svc.webapi.clone(), chans.queue.clone());
-            }
-        }
-        KeyCode::Left => {
-            app.view.mode = app.view.mode.shift(-1);
-            if app.view.mode == RightView::Queue && app.transport.playback_started {
-                spawn_queue_fetch(app.svc.webapi.clone(), chans.queue.clone());
-            }
+        KeyCode::Right | KeyCode::Char(']') => shift_section(app, 1),
+        KeyCode::Left | KeyCode::Char('[') => shift_section(app, -1),
+        // Lyrics is a toggle off Now Playing rather than a stop on a rotation:
+        // the arrows that used to rotate the right pane now drive the sections.
+        KeyCode::Char('l') => {
+            app.view.mode = if app.view.mode == RightView::Lyrics {
+                RightView::NowPlaying
+            } else {
+                RightView::Lyrics
+            };
+            // Neither view shows a queue pane, so the keyboard comes back —
+            // to the view just chosen, not to whatever `Tab` once displaced.
+            app.view.queue_return = None;
+            app.view.focus = Focus::Library;
         }
         // The frame loop notices the layout change and wipes the art box.
         KeyCode::Char('z') => app.view.zen = !app.view.zen,
-        KeyCode::Down | KeyCode::Char('j') => app.move_sel(1),
-        KeyCode::Up | KeyCode::Char('k') => app.move_sel(-1),
+        KeyCode::Down | KeyCode::Char('j') => move_focused(app, 1),
+        KeyCode::Up | KeyCode::Char('k') => move_focused(app, -1),
         // Needs a terminal that reports modified Enter (kitty, WezTerm, foot).
         KeyCode::Enter if mods.contains(KeyModifiers::SHIFT) => play_selected_context(app, false),
+        // A queue row plays from there; the library's Enter opens or plays.
+        KeyCode::Enter if app.view.focus == Focus::Queue => {
+            play_queue_item(app, app.transport.queue_selected)
+        }
         KeyCode::Enter => match app.activate() {
             Activated::Open(uri, name) => {
                 app.search.playlist_results = None;
@@ -282,18 +288,89 @@ pub(crate) fn handle_key(
     false
 }
 
+/// Rotate the library sections, which also brings the keyboard back to them —
+/// stepping through sections while the cursor sits in the queue would move a
+/// selection off screen.
+fn shift_section(app: &mut App, delta: isize) {
+    app.search.searching = false;
+    app.browse.section = app.browse.section.shift(delta);
+    app.browse.selected = app.first_selectable();
+    app.view.focus = Focus::Library;
+}
+
+/// Move the cursor of whichever list currently holds focus.
+fn move_focused(app: &mut App, dir: isize) {
+    match app.view.focus {
+        Focus::Library => app.move_sel(dir),
+        Focus::Queue => app.move_queue_sel(dir),
+    }
+}
+
+/// `Tab`: hand the keyboard to the queue pane, or take it back.
+///
+/// Focusing the queue has to guarantee it is on screen. The wide Now Playing
+/// layout already renders it beside the cover; every narrower layout has to
+/// switch the right pane over. `queue_pane` is the renderer's own answer to
+/// "was one drawn", which keeps that decision from re-deriving the layout
+/// thresholds here and drifting out of step with them.
+fn toggle_focus(app: &mut App, out: &FrameOut, chans: &UiChannels) {
+    if app.view.focus == Focus::Queue {
+        unfocus_queue(app);
+        return;
+    }
+    app.view.focus = Focus::Queue;
+    if out.hits.queue_pane.is_none() {
+        // Nothing drew a queue, so give it the right pane — and remember what
+        // that displaced, or leaving the queue would strand the user on it.
+        app.view.queue_return = Some(app.view.mode);
+        app.view.mode = RightView::Queue;
+    }
+    // Same gate as every other route to the Queue view: a reclaimed session
+    // has a server-side queue worth fetching even before playback started here.
+    if app.transport.playback_started || app.session.reclaimed {
+        spawn_queue_fetch(app.svc.webapi.clone(), chans.queue.clone());
+    }
+    app.normalize_queue_selection();
+}
+
+/// Hand the keyboard back to the library, restoring whatever view `Tab`
+/// displaced to put the queue on screen in the first place.
+pub(crate) fn unfocus_queue(app: &mut App) {
+    app.view.focus = Focus::Library;
+    if let Some(previous) = app.view.queue_return.take() {
+        app.view.mode = previous;
+    }
+}
+
+/// Whether the movement keys belong to the queue rather than the library.
+///
+/// Only these keys retarget: the library's own commands (`/`, `o`, `r`, `P`,
+/// `S`) keep acting on the library even while the queue holds the cursor.
+fn queue_owns_movement(app: &App, code: KeyCode) -> bool {
+    app.view.focus == Focus::Queue
+        && matches!(
+            code,
+            KeyCode::Up | KeyCode::Down | KeyCode::Enter | KeyCode::Char('j' | 'k')
+        )
+}
+
 /// Keys whose whole effect is on the library pane.
 ///
 /// Zen hides that pane, so these do nothing there rather than moving a selection
 /// nobody can see — and `a` is deliberately absent, because it retargets onto
-/// the playing track instead of going quiet.
-pub(crate) fn drives_library(code: KeyCode) -> bool {
+/// the playing track instead of going quiet. `Tab` is absent too: it moves the
+/// cursor to the queue, which zen still shows.
+pub(crate) fn drives_library(code: KeyCode, mods: KeyModifiers) -> bool {
+    // Shift+arrows seek the playhead; only the bare arrows rotate sections.
+    if matches!(code, KeyCode::Left | KeyCode::Right) && mods.contains(KeyModifiers::SHIFT) {
+        return false;
+    }
     matches!(
         code,
-        KeyCode::Tab
-            | KeyCode::BackTab
-            | KeyCode::Up
+        KeyCode::Up
             | KeyCode::Down
+            | KeyCode::Left
+            | KeyCode::Right
             | KeyCode::Enter
             | KeyCode::Esc
             | KeyCode::Char('/' | '[' | ']' | 'j' | 'k' | 'o' | 'r' | 'P' | 'S')

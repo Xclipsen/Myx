@@ -2,7 +2,9 @@
 
 use crate::*;
 
-/// Mouse hit rects, written by the renderer and read only by `handle_mouse`.
+/// Hit rects written by the renderer. Read by `handle_mouse`, and by
+/// `handle_key` for the one question the keymap cannot answer on its own:
+/// which panes the current layout actually put on screen.
 ///
 /// Output only: nothing here is threaded frame-to-frame, and every rect is
 /// (re)set or cleared on the frame that draws the thing it belongs to. The one
@@ -26,6 +28,10 @@ pub(crate) struct HitRects {
     pub(crate) actions: Vec<Rect>,
     /// Visible queue rows, paired with their index in the live queue.
     pub(crate) queue: Vec<(usize, Rect)>,
+    /// The queue pane itself, whenever one was drawn — set even when the queue
+    /// is empty and `queue` therefore holds no rows. `Tab` reads this to decide
+    /// whether focusing the queue also has to switch the right pane to it.
+    pub(crate) queue_pane: Option<Rect>,
     /// Equalizer overlay controls. Empty whenever that modal is closed.
     pub(crate) eq_toggle: Option<Rect>,
     pub(crate) eq_presets: Vec<(EqualizerPreset, Rect)>,

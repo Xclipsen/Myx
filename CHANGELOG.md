@@ -6,7 +6,23 @@ they are added to, never rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **Navigation rework.** `←`/`→` now switch library sections (joining `[`/`]`),
+  and `⇥` moves the keyboard between the library sidebar and the queue instead
+  of rotating sections. The queue is a real navigable list: it has its own
+  cursor, takes `↑↓` / `j k` while focused, and `⏎` plays from the highlighted
+  track onward — the keyboard equivalent of clicking a queue row. `⇥` works
+  from any view, switching the right pane to the queue when the layout is too
+  narrow to show one beside Now Playing, and `Esc` (or `⇥` again) restores the
+  view it displaced. Lyrics moved to its own toggle, `l`, since the arrows no
+  longer rotate the right pane.
+
 ### Fixed
+
+- Reaching the Queue view by keyboard now refreshes it after a reclaimed
+  session, matching the mouse and startup paths. The keyboard route alone
+  gated the fetch on local playback having started.
 
 - macOS: AirPods, headphone and Control Center controls now work without the
   terminal focused. The handlers were registered but nothing ran the

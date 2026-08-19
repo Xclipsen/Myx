@@ -106,6 +106,23 @@ impl App {
             }
         }
     }
+    /// Move the queue cursor by `dir`, clamped at the ends. The queue mirrors
+    /// `move_sel` without the header-skipping loop: queue rows are all tracks.
+    pub(crate) fn move_queue_sel(&mut self, dir: isize) {
+        self.transport.queue_selected = step_cursor(
+            self.transport.queue_selected,
+            self.transport.queue.len(),
+            dir,
+        );
+    }
+
+    /// Keep the queue cursor inside the list — a refresh can shorten the queue
+    /// under it (the counterpart to `normalize_selection` for the library).
+    pub(crate) fn normalize_queue_selection(&mut self) {
+        self.transport.queue_selected =
+            clamp_cursor(self.transport.queue_selected, self.transport.queue.len());
+    }
+
     /// If the selection landed on a header (e.g. after data loads), bump it off.
     pub(crate) fn normalize_selection(&mut self) {
         if self

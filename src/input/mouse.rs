@@ -134,7 +134,12 @@ pub(crate) fn handle_mouse(
         if !consumed && is_down {
             let queue_index = queue_row_at(&out.hits.queue, m.column, m.row);
             if let Some(index) = queue_index {
+                // Clicking a row is also how the queue takes the keyboard, so
+                // the cursor picks up where the pointer left off.
+                app.view.focus = Focus::Queue;
+                app.transport.queue_selected = index;
                 play_queue_item(app, index);
+                app.normalize_queue_selection();
                 consumed = true;
             }
         }
@@ -148,6 +153,17 @@ pub(crate) fn handle_mouse(
                 .map(|(v, _)| *v);
             if let Some(v) = hit {
                 app.view.mode = v;
+                // Picking a view by hand overrides any view `Tab` displaced.
+                app.view.queue_return = None;
+                // Follow the pointer: the Queue tab takes the keyboard, any
+                // other tab hands it back. Deciding this from the view just
+                // clicked rather than from `queue_pane` matters — the hit
+                // rects still describe the frame drawn *before* this click.
+                app.view.focus = if v == RightView::Queue {
+                    Focus::Queue
+                } else {
+                    Focus::Library
+                };
                 if v == RightView::Queue
                     && (app.session.reclaimed || app.transport.playback_started)
                 {
@@ -172,6 +188,7 @@ pub(crate) fn handle_mouse(
                         .unwrap_or(false);
                     if selectable {
                         app.browse.selected = idx;
+                        app.view.focus = Focus::Library;
                         let now = Instant::now();
                         let dbl = app
                             .session
@@ -183,7 +200,7 @@ pub(crate) fn handle_mouse(
                         if dbl {
                             app.session.last_click = None;
                             let quit =
-                                handle_key(app, KeyCode::Enter, KeyModifiers::empty(), chans);
+                                handle_key(app, out, KeyCode::Enter, KeyModifiers::empty(), chans);
                             if quit {
                                 return true;
                             }
@@ -243,7 +260,7 @@ fn point_in_rect(rect: Rect, column: u16, row: u16) -> bool {
     column >= rect.x && column < rect.right() && row >= rect.y && row < rect.bottom()
 }
 
-fn play_queue_item(app: &mut App, index: usize) {
+pub(crate) fn play_queue_item(app: &mut App, index: usize) {
     let Some(uri) = app.transport.queue_uris.get(index).cloned() else {
         return;
     };

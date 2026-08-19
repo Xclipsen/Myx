@@ -32,6 +32,7 @@ const ZEN_QUEUE_SPLIT_MIN_WIDTH: u16 = 52;
 pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtRepaint) {
     out.art = None;
     out.hits.queue.clear();
+    out.hits.queue_pane = None;
     let theme = app.theme.displayed;
     let area = f.area();
     f.render_widget(Block::default().style(theme.base()), area);
@@ -66,18 +67,15 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
         Paragraph::new(Line::from(view_tabs(app, theme))).alignment(Alignment::Right),
         rows[0],
     );
-    // Per-tab hit rects for the mouse (mirrors view_tabs: "\u2190\u2192 " prefix + labels joined by " \u00b7 ").
-    let mut total: usize = 3; // "\u2190\u2192 "
+    // Per-tab hit rects for the mouse (mirrors view_tabs: labels joined by " \u00b7 ").
+    let mut total: usize = 0;
     for (i, v) in RightView::ALL.iter().enumerate() {
         if i > 0 {
             total += 3;
         } // " \u00b7 "
         total += v.label().chars().count();
     }
-    let mut tx_x = rows[0]
-        .right()
-        .saturating_sub(total as u16)
-        .saturating_add(3);
+    let mut tx_x = rows[0].right().saturating_sub(total as u16);
     let mut tabs = Vec::with_capacity(RightView::ALL.len());
     for (i, v) in RightView::ALL.iter().enumerate() {
         if i > 0 {
@@ -165,9 +163,11 @@ pub(crate) fn render(f: &mut Frame, app: &App, out: &mut FrameOut, repaint: ArtR
     }
 }
 
-/// The `Now Playing · Lyrics · Visualizer` indicator, active one lit.
+/// The `Now Playing · Lyrics · Queue` indicator, active one lit.
 pub(crate) fn view_tabs<'a>(app: &App, theme: Theme) -> Vec<Span<'a>> {
-    let mut spans = vec![Span::styled("←→ ", theme.muted())];
+    // No key prefix: the tabs are no longer one rotation. `⇥` reaches the
+    // queue and `l` toggles the lyrics, and the footer names both.
+    let mut spans: Vec<Span<'a>> = Vec::new();
     for (i, v) in RightView::ALL.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" · ", theme.muted()));

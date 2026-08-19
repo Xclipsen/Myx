@@ -51,6 +51,9 @@ pub(crate) struct Transport {
     pub(crate) volume: u8, // 0..=100 (mirrors the 50% mixer default)
     pub(crate) queue: Vec<String>,
     pub(crate) queue_uris: Vec<String>,
+    // Cursor into `queue` while the queue pane holds focus. Runtime-only: a
+    // refreshed queue re-clamps it (`normalize_queue_selection`).
+    pub(crate) queue_selected: usize,
     // Whether real playback has started this session (gates resume-on-play).
     pub(crate) playback_started: bool,
     // What's playing (context/radio/liked), for faithful resume on reboot.
@@ -107,6 +110,12 @@ impl SearchState {
 pub(crate) struct ViewState {
     // Which view fills the right pane.
     pub(crate) mode: RightView,
+    // Which list the keyboard drives (library sidebar or queue pane).
+    pub(crate) focus: Focus,
+    // The view `Tab` displaced when it had to switch the right pane over to
+    // the queue, so leaving the queue can put it back. `None` when the queue
+    // was already on screen and nothing was displaced.
+    pub(crate) queue_return: Option<RightView>,
     // Sidebar hidden, so the right view (and its cover) gets the whole width.
     pub(crate) zen: bool,
     // Lyrics: (timestamp_ms, line). Synced when timestamps are non-zero.

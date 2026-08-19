@@ -15,8 +15,9 @@ pub(crate) fn render_footer(f: &mut Frame, app: &App, theme: Theme, area: Rect) 
     // Flagged hints go with the library pane, which zen hides — a key that does
     // nothing must not be advertised.
     let hints = [
-        (true, key("⇥"), lbl(" section   ")),
-        (false, key("←→"), lbl(" view   ")),
+        (false, key("⇥"), lbl(" queue   ")),
+        (true, key("←→"), lbl(" section   ")),
+        (false, key("l"), lbl(" lyrics   ")),
         (true, key("/"), lbl(" search   ")),
         (
             true,

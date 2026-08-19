@@ -63,17 +63,23 @@ browse with `↑↓` and hit `⏎` to play. After that, just `myx`.
 ## Keys
 
 ```
-⇥ / [ ]    switch section        ← →      switch view
+← → / [ ]  switch section        ⇥        library ⇄ queue
 ↑↓ / j k   move                  ⏎        play / open
 ⇧ ⏎        play the highlighted album, playlist or artist
-/          search                a        actions
-space      play · pause          n / b    next · prev
-⇧ ← →      seek                  s        shuffle
-+ / -      volume                R        repeat
-o          sort                  r        reload
-z          hide sidebar          e        equalizer
-q          quit
+l          lyrics                a        actions
+/          search                space    play · pause
+⇧ ← →      seek                  n / b    next · prev
++ / -      volume                s        shuffle
+o          sort                  R        repeat
+z          hide sidebar          r        reload
+e          equalizer             q        quit
 ```
+
+`⇥` moves the keyboard between the library sidebar and the queue, from any
+view — the queue then takes `↑↓` / `j k`, and `⏎` plays from the highlighted
+track onward. `Esc` (or `⇥` again) hands the keyboard back and restores the
+view you were on. On wide terminals the queue is already beside Now Playing;
+on narrower ones `⇥` brings it up.
 
 Media keys (Play/Pause, Stop, Next, Prev, Volume) work when the terminal is
 focused. On macOS and Linux, AirPods and headphone controls work from anywhere

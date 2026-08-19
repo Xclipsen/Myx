@@ -275,26 +275,58 @@ fn a_scrub_cannot_leave_the_track() {
     assert_eq!(scrub_target(0, 0, -5_000), 0);
 }
 
+// ------------------------------------------------------- the queue cursor
+
+#[test]
+fn the_queue_cursor_stops_at_both_ends() {
+    // Walls, not a wrap — same feel as the library list.
+    assert_eq!(step_cursor(0, 3, -1), 0);
+    assert_eq!(step_cursor(2, 3, 1), 2);
+    assert_eq!(step_cursor(1, 3, 1), 2);
+    assert_eq!(step_cursor(1, 3, -1), 0);
+}
+
+#[test]
+fn an_empty_queue_has_nowhere_to_move() {
+    assert_eq!(step_cursor(0, 0, 1), 0);
+    assert_eq!(step_cursor(0, 0, -1), 0);
+}
+
+#[test]
+fn a_shrinking_queue_pulls_the_cursor_back_in() {
+    // A refresh can drop rows out from under the cursor (tracks played through
+    // while the pane was open), which must not leave it pointing past the end.
+    assert_eq!(clamp_cursor(7, 3), 2);
+    assert_eq!(clamp_cursor(1, 3), 1);
+    assert_eq!(clamp_cursor(0, 0), 0);
+}
+
 // -------------------------------------------------------- drives_library
 
 #[test]
 fn zen_ignores_the_keys_that_only_move_the_hidden_library() {
+    let none = KeyModifiers::empty();
     for code in [
-        KeyCode::Tab,
-        KeyCode::BackTab,
         KeyCode::Up,
         KeyCode::Down,
+        // The bare arrows rotate the sections, so they belong to the library.
+        KeyCode::Left,
+        KeyCode::Right,
         KeyCode::Enter,
         KeyCode::Char('j'),
         KeyCode::Char('/'),
         KeyCode::Char('o'),
     ] {
-        assert!(drives_library(code), "{code:?} only drives the library");
+        assert!(
+            drives_library(code, none),
+            "{code:?} only drives the library"
+        );
     }
 }
 
 #[test]
 fn zen_keeps_playback_and_the_right_hand_pane() {
+    let none = KeyModifiers::empty();
     for code in [
         KeyCode::Char(' '),
         KeyCode::Char('n'),
@@ -302,12 +334,30 @@ fn zen_keeps_playback_and_the_right_hand_pane() {
         KeyCode::Char('s'),
         KeyCode::Char('z'),
         KeyCode::Char('q'),
-        KeyCode::Left,
-        KeyCode::Right,
+        // Moves the cursor to the queue, which zen still renders.
+        KeyCode::Tab,
+        KeyCode::BackTab,
+        // Toggles the Lyrics view — a right-hand pane, not the library.
+        KeyCode::Char('l'),
         // Retargets onto the playing track rather than going quiet.
         KeyCode::Char('a'),
     ] {
-        assert!(!drives_library(code), "{code:?} must still work in zen");
+        assert!(
+            !drives_library(code, none),
+            "{code:?} must still work in zen"
+        );
+    }
+}
+
+#[test]
+fn zen_still_seeks_with_shifted_arrows() {
+    // The bare arrows rotate sections and go quiet in zen; the shifted ones
+    // seek the playhead and must survive the same gate.
+    for code in [KeyCode::Left, KeyCode::Right] {
+        assert!(
+            !drives_library(code, KeyModifiers::SHIFT),
+            "shift+{code:?} seeks and must still work in zen"
+        );
     }
 }
 

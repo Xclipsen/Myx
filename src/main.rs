@@ -435,6 +435,7 @@ async fn boot(
             },
             queue,
             queue_uris,
+            queue_selected: 0,
             playback_started: startup_uri.is_some(),
             source,
             source_name,
@@ -450,6 +451,8 @@ async fn boot(
         },
         view: ViewState {
             mode: RightView::NowPlaying,
+            focus: Focus::Library,
+            queue_return: None,
             zen: false,
             lyrics: Vec::new(),
             lyrics_synced: false,
@@ -849,7 +852,7 @@ async fn run_ui(
             ev = in_rx.recv_async() => {
                 match ev {
                     Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
-                        let quit = handle_key(&mut app, key.code, key.modifiers, &chans);
+                        let quit = handle_key(&mut app, &out, key.code, key.modifiers, &chans);
                         if quit {
                             save_state(&app);
                             break;
